@@ -28,14 +28,26 @@ brokers' `已实现盈亏` for the final `财产转让所得` (capital-gains) ta
 
 ## Prerequisite: the official Longbridge CLI
 
-Install and authenticate the Longbridge CLI so this works in your shell:
+This skill **shells out to `longbridge`** — it never handles your credentials. If the CLI
+is missing, the script **stops and prints these install/login steps** (it does not
+auto-install). Set it up once:
 
 ```bash
+# install (pick your platform)
+brew install --cask longbridge/tap/longbridge-terminal                                   # macOS
+curl -sSL https://open.longbridge.com/longbridge/longbridge-terminal/install | sh        # macOS/Linux
+scoop install https://open.longbridge.com/longbridge/longbridge-terminal/longbridge.json # Windows
+
+# authenticate (opens a browser, OAuth)
+longbridge auth login
+
+# verify
 longbridge statement --type monthly --format json
 ```
 
-The skill **shells out to `longbridge`** — it never handles your credentials. Set up auth
-per https://open.longbridge.com/zh-CN/skill/ (API key / token via env or login). Python 3.10+.
+If a CLI call fails with an auth error, the script tells you to run `longbridge auth login`.
+Docs: https://open.longbridge.com/zh-CN/skill/ . Python 3.10+. (Note: this uses the **CLI**,
+not the Longbridge MCP.)
 
 ## Quick Start
 

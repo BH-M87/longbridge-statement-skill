@@ -46,16 +46,42 @@ def num(s):
         return 0.0
 
 
+INSTALL_HELP = """\
+✗ Longbridge CLI ('longbridge') not found. This skill drives the official CLI — install it:
+
+  • macOS (Homebrew):
+      brew install --cask longbridge/tap/longbridge-terminal
+  • macOS / Linux (script):
+      curl -sSL https://open.longbridge.com/longbridge/longbridge-terminal/install | sh
+  • Windows (Scoop):
+      scoop install https://open.longbridge.com/longbridge/longbridge-terminal/longbridge.json
+
+Then log in (opens a browser for OAuth):
+      longbridge auth login
+
+Verify it works, then re-run this script:
+      longbridge statement --type monthly --format json
+
+Docs: https://open.longbridge.com/zh-CN/skill/"""
+
+AUTH_HINT = ("\n\n→ This looks like an authentication problem. Log in and retry:\n"
+             "      longbridge auth login\n"
+             "  Docs: https://open.longbridge.com/zh-CN/skill/")
+_AUTH_KEYS = ("auth", "login", "token", "unauthor", "credential", "401", "403",
+              "登录", "登錄", "认证", "認證", "授权", "授權", "未登录", "未登錄")
+
+
 def lb_json(args):
-    """Run `longbridge ... --format json` and parse stdout."""
+    """Run `longbridge ... --format json` and parse stdout; guide install/auth on failure."""
     try:
         out = subprocess.run(["longbridge", *args, "--format", "json"],
                              capture_output=True, text=True)
     except FileNotFoundError:
-        sys.exit("Longbridge CLI not found. Install & authenticate it first "
-                 "(see https://open.longbridge.com/zh-CN/skill/).")
+        sys.exit(INSTALL_HELP)                       # CLI not installed -> full install guide
     if out.returncode != 0:
-        sys.exit(f"`longbridge {' '.join(args)}` failed:\n{out.stderr.strip() or out.stdout.strip()}")
+        err = (out.stderr or out.stdout).strip()
+        hint = AUTH_HINT if any(k in err.lower() for k in _AUTH_KEYS) else ""
+        sys.exit(f"`longbridge {' '.join(args)}` failed:\n{err}{hint}")
     try:
         return json.loads(out.stdout)
     except json.JSONDecodeError:

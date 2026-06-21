@@ -23,15 +23,25 @@ Method is documented in [`SKILL.md`](SKILL.md).
 
 ## Prerequisite: official Longbridge CLI
 
-This tool **shells out to `longbridge`** — it never handles your credentials. Install and
-authenticate the official Longbridge CLI (see https://open.longbridge.com/zh-CN/skill/) so
-this works in your shell:
+This tool **shells out to `longbridge`** — it never handles your credentials. **If the CLI
+isn't installed, the script stops and prints these exact steps** (it won't auto-install):
 
 ```bash
+# install (pick your platform)
+brew install --cask longbridge/tap/longbridge-terminal                                   # macOS
+curl -sSL https://open.longbridge.com/longbridge/longbridge-terminal/install | sh        # macOS/Linux
+scoop install https://open.longbridge.com/longbridge/longbridge-terminal/longbridge.json # Windows
+
+# authenticate (opens a browser, OAuth)
+longbridge auth login
+
+# verify it works
 longbridge statement --type monthly --format json
 ```
 
-No third-party Python packages required (standard library only). Python 3.10+.
+If a CLI call fails because you're not logged in, the script points you to
+`longbridge auth login`. Docs: https://open.longbridge.com/zh-CN/skill/ . This uses the
+**CLI** (not the Longbridge MCP). No third-party Python packages required. Python 3.10+.
 
 ## Usage
 
