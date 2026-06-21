@@ -1,0 +1,15 @@
+# Never commit personal financial data / statement exports
+*.csv
+*.json
+*.pdf
+*.xlsx
+*.xls
+out/
+longbridge_parsed/
+*_parsed/
+
+# Python / OS junk
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
