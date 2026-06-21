@@ -21,8 +21,9 @@
 
 ## 前置：长桥官方 CLI
 
-本工具**只调用 `longbridge` 命令**，不碰你的任何凭证。**如果没装 CLI，脚本会直接停下并打印下面这些
-安装/登录步骤**（不会自动安装）。一次性配置：
+本工具**只调用 `longbridge` 命令**，不碰你的任何凭证。**如果没装 CLI，脚本会询问是否帮你自动安装
+（需你确认 y/N），装好后再询问是否帮你登录（`longbridge auth login`）**；你拒绝或非交互运行时则回退到
+打印手动步骤。手动配置：
 
 ```bash
 # 安装（按平台任选其一）
@@ -38,7 +39,7 @@ longbridge statement --type monthly --format json
 ```
 
 如果调用因未登录失败，脚本会提示你运行 `longbridge auth login`。文档：
-https://open.longbridge.com/zh-CN/skill/ 。本工具用的是 **CLI**（不是长桥 MCP）。
+https://open.longbridge.com/zh-CN/docs/cli/ 。本工具用的是 **CLI**（不是长桥 MCP）。
 无需第三方 Python 包，Python 3.10+。
 
 ## 用法

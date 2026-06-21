@@ -24,7 +24,9 @@ Method is documented in [`SKILL.md`](SKILL.md).
 ## Prerequisite: official Longbridge CLI
 
 This tool **shells out to `longbridge`** — it never handles your credentials. **If the CLI
-isn't installed, the script stops and prints these exact steps** (it won't auto-install):
+isn't installed, the script offers to install it for you (after you confirm), then offers to
+run `longbridge auth login`** — each step asks for y/N first (and falls back to printing the
+manual steps if you decline or run it non-interactively). Manual setup:
 
 ```bash
 # install (pick your platform)
@@ -40,7 +42,7 @@ longbridge statement --type monthly --format json
 ```
 
 If a CLI call fails because you're not logged in, the script points you to
-`longbridge auth login`. Docs: https://open.longbridge.com/zh-CN/skill/ . This uses the
+`longbridge auth login`. Docs: https://open.longbridge.com/zh-CN/docs/cli/ . This uses the
 **CLI** (not the Longbridge MCP). No third-party Python packages required. Python 3.10+.
 
 ## Usage

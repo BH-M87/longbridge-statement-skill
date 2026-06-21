@@ -8,7 +8,7 @@ description: Use when computing realized P&L, dividends, interest, or tax due fr
 ## Overview
 
 Longbridge (長橋證券) has an **official command-line tool** (`longbridge`, see
-https://open.longbridge.com/zh-CN/skill/). This skill calls `longbridge statement` to
+https://open.longbridge.com/zh-CN/docs/cli/). This skill calls `longbridge statement` to
 fetch the monthly statements as JSON and turns them into tax-ready CSVs.
 
 Like most brokers, Longbridge statements have **no "已实现盈亏" (realized P&L) section**,
@@ -29,8 +29,9 @@ brokers' `已实现盈亏` for the final `财产转让所得` (capital-gains) ta
 ## Prerequisite: the official Longbridge CLI
 
 This skill **shells out to `longbridge`** — it never handles your credentials. If the CLI
-is missing, the script **stops and prints these install/login steps** (it does not
-auto-install). Set it up once:
+is missing, the script **offers to install it for you (asks for confirmation first), then
+offers to run `longbridge auth login`** — both steps require your y/N confirmation, and it
+falls back to printing manual steps if you decline or run non-interactively. Manual setup:
 
 ```bash
 # install (pick your platform)
@@ -46,7 +47,7 @@ longbridge statement --type monthly --format json
 ```
 
 If a CLI call fails with an auth error, the script tells you to run `longbridge auth login`.
-Docs: https://open.longbridge.com/zh-CN/skill/ . Python 3.10+. (Note: this uses the **CLI**,
+Docs: https://open.longbridge.com/zh-CN/docs/cli/ . Python 3.10+. (Note: this uses the **CLI**,
 not the Longbridge MCP.)
 
 ## Quick Start

@@ -2,7 +2,7 @@
 """Pull Longbridge (長橋證券) statements via the official CLI and build tax-ready CSVs.
 
 Companion to futu-statement-skill, for the other broker. Longbridge has an official
-command-line tool (`longbridge`, see https://open.longbridge.com/zh-CN/skill/); this
+command-line tool (`longbridge`, see https://open.longbridge.com/zh-CN/docs/cli/); this
 script calls `longbridge statement` to fetch the monthly statements as JSON and computes
 the figures you need for individual income tax on foreign income (个税 境外所得), CRS,
 or P&L reconciliation.
@@ -28,7 +28,7 @@ Outputs (CSV, utf-8-sig; no personal data is embedded — everything comes from 
     longbridge_<YEAR>_税务汇总.csv           tax summary: gains/dividends/interest + tax due (--rate)
 """
 from __future__ import annotations
-import argparse, csv, json, os, subprocess, sys
+import argparse, csv, json, os, shutil, subprocess, sys
 
 # account_balance_changes biz_codes that are internal/round-trip, excluded from cashflow view
 INTERNAL_BIZ = {"LMMFP", "LMMFR", "LIPOREFD", "LIPODR", "LINTDR"}
@@ -46,41 +46,91 @@ def num(s):
         return 0.0
 
 
-INSTALL_HELP = """\
-✗ Longbridge CLI ('longbridge') not found. This skill drives the official CLI — install it:
-
-  • macOS (Homebrew):
-      brew install --cask longbridge/tap/longbridge-terminal
-  • macOS / Linux (script):
-      curl -sSL https://open.longbridge.com/longbridge/longbridge-terminal/install | sh
-  • Windows (Scoop):
-      scoop install https://open.longbridge.com/longbridge/longbridge-terminal/longbridge.json
-
-Then log in (opens a browser for OAuth):
-      longbridge auth login
-
-Verify it works, then re-run this script:
-      longbridge statement --type monthly --format json
-
-Docs: https://open.longbridge.com/zh-CN/skill/"""
-
-AUTH_HINT = ("\n\n→ This looks like an authentication problem. Log in and retry:\n"
-             "      longbridge auth login\n"
-             "  Docs: https://open.longbridge.com/zh-CN/skill/")
+CLI_DOCS = "https://open.longbridge.com/zh-CN/docs/cli/"
+INSTALL = {
+    "brew": "brew install --cask longbridge/tap/longbridge-terminal",
+    "curl": "curl -sSL https://open.longbridge.com/longbridge/longbridge-terminal/install | sh",
+    "scoop": "scoop install https://open.longbridge.com/longbridge/longbridge-terminal/longbridge.json",
+}
 _AUTH_KEYS = ("auth", "login", "token", "unauthor", "credential", "401", "403",
               "登录", "登錄", "认证", "認證", "授权", "授權", "未登录", "未登錄")
+_auth_retried = False
+
+
+def _confirm(prompt):
+    """Ask y/N; False (no action) when not interactive, so automation never hangs."""
+    if not sys.stdin.isatty():
+        return False
+    try:
+        return input(prompt).strip().lower() in ("y", "yes", "是")
+    except EOFError:
+        return False
+
+
+def _install_guide():
+    print(f"""✗ 未检测到 Longbridge CLI（'longbridge'）。本工具依赖官方 CLI。
+手动安装（任选其一）：
+  • macOS:        {INSTALL['brew']}
+  • macOS/Linux:  {INSTALL['curl']}
+  • Windows:      {INSTALL['scoop']}
+随后登录：longbridge auth login
+文档：{CLI_DOCS}""", file=sys.stderr)
+
+
+def _run(cmd, shell=False):
+    print(f"  → 执行: {cmd if isinstance(cmd, str) else ' '.join(cmd)}", file=sys.stderr)
+    return subprocess.run(cmd, shell=shell).returncode
+
+
+def _login(force=False):
+    q = ("是否现在登录授权？将运行 `longbridge auth login` 并打开浏览器。[y/N] " if force
+         else "检测到未登录/授权失效。是否现在运行 `longbridge auth login`（打开浏览器）？[y/N] ")
+    if _confirm("\n" + q):
+        _run(["longbridge", "auth", "login"])
+        return True
+    return False
+
+
+def ensure_cli():
+    """If the CLI is missing, offer to install it (asks first); then offer to log in."""
+    if shutil.which("longbridge"):
+        return
+    _install_guide()
+    if not _confirm("\n是否现在帮你自动安装？（需要你确认）[y/N] "):
+        sys.exit("已取消。请手动安装后重试。")
+    if sys.platform == "darwin":
+        cmd = INSTALL["brew"] if shutil.which("brew") else INSTALL["curl"]
+    elif sys.platform.startswith("linux"):
+        cmd = INSTALL["curl"]
+    else:
+        sys.exit(f"Windows 请手动安装：{INSTALL['scoop']}")
+    print(f"\n即将执行安装命令：\n  {cmd}", file=sys.stderr)
+    if not _confirm("确认执行？[y/N] "):
+        sys.exit("已取消。")
+    _run(cmd, shell=True)
+    if not shutil.which("longbridge"):
+        sys.exit("安装似乎未完成（PATH 里仍找不到 longbridge）。请重开终端或手动安装后重试。")
+    print("✓ Longbridge CLI 已安装。", file=sys.stderr)
+    _login(force=True)
 
 
 def lb_json(args):
-    """Run `longbridge ... --format json` and parse stdout; guide install/auth on failure."""
+    """Run `longbridge ... --format json`; on auth failure, offer to log in and retry once."""
+    global _auth_retried
     try:
-        out = subprocess.run(["longbridge", *args, "--format", "json"],
-                             capture_output=True, text=True)
+        out = subprocess.run(["longbridge", *args, "--format", "json"], capture_output=True, text=True)
     except FileNotFoundError:
-        sys.exit(INSTALL_HELP)                       # CLI not installed -> full install guide
+        _install_guide(); sys.exit(1)
     if out.returncode != 0:
         err = (out.stderr or out.stdout).strip()
-        hint = AUTH_HINT if any(k in err.lower() for k in _AUTH_KEYS) else ""
+        is_auth = any(k in err.lower() for k in _AUTH_KEYS)
+        if is_auth and not _auth_retried:
+            _auth_retried = True
+            print(f"`longbridge {' '.join(args)}` 失败（疑似未登录）:\n{err}", file=sys.stderr)
+            if _login():
+                return lb_json(args)                 # retry once after login
+        hint = (f"\n\n→ 疑似认证问题，请登录后重试: longbridge auth login\n  文档: {CLI_DOCS}"
+                if is_auth else "")
         sys.exit(f"`longbridge {' '.join(args)}` failed:\n{err}{hint}")
     try:
         return json.loads(out.stdout)
@@ -140,6 +190,7 @@ def main(argv=None):
     year, rate = args.year, args.rate
     os.makedirs(args.outdir, exist_ok=True)
 
+    ensure_cli()                                     # offer to install/login if missing (asks first)
     keys = list_keys(year)
     if not keys:
         sys.exit(f"no monthly statements found for {year} — is the Longbridge CLI authenticated?")
