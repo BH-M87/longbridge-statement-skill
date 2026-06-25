@@ -80,8 +80,11 @@ The script prints realized total, dividends and interest so you can sanity-check
 1. `longbridge statement --type monthly --start-date <YEAR-1>-12-01 --limit 14` → file keys
    for the 12 months **plus the prior December** (for opening cost basis).
 2. `longbridge statement export --file-key <k>` → each month's full JSON.
-3. Reconstruct realized P&L (average-cost, long side) from `stock_trades`, seeded from the
-   prior-Dec `equity_holdings`. Dividends from `corps`; interest from `interests`.
+3. Reconstruct realized P&L (average-cost, long + short) from `stock_trades`, seeded from the
+   prior-Dec `equity_holdings`. Realized accrues only when a trade reduces the open position, so
+   positions still open at year-end (long or short) contribute 0. A negative position is flagged
+   (a cash account can't really short — usually missing cost basis) instead of booking the whole
+   sale as profit. Dividends from `corps`; interest from `interests`.
 
 ## Statement sections used
 

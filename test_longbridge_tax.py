@@ -27,6 +27,40 @@ class CurrencyHandlingTest(unittest.TestCase):
         self.assertEqual(round(book[("HKD", "ABC")]["realized"], 2), 10.0)
         self.assertEqual(round(book[("USD", "ABC")]["realized"], 2), 3.0)
 
+    def test_opening_short_not_covered_is_not_booked_as_profit(self):
+        # 开年第一笔就是卖空且全年未平仓:年末为空头,未实现,不应计入已实现盈亏
+        trades = [trade_row("2025/01/02", "ABC", "ABC Ltd", "HKD", 100, 1000.0)]
+
+        book = longbridge_tax.realized_by_ticker(trades, {})
+
+        b = book[("HKD", "ABC")]
+        self.assertEqual(round(b["realized"], 2), 0.0)
+        self.assertLess(b["pos"], 0)          # 仍为空头
+        self.assertTrue(b["shorted"])         # 标记为负持仓,供核对
+
+    def test_covered_short_realizes_proceeds_minus_cover_cost(self):
+        # 卖空 +1000 后买回 -900,正确已实现应为 100(而非旧逻辑的 1000)
+        trades = [
+            trade_row("2025/01/02", "ABC", "ABC Ltd", "HKD", 100, 1000.0),
+            trade_row("2025/03/02", "ABC", "ABC Ltd", "HKD", 100, -900.0),
+        ]
+
+        book = longbridge_tax.realized_by_ticker(trades, {})
+
+        b = book[("HKD", "ABC")]
+        self.assertEqual(round(b["realized"], 2), 100.0)
+        self.assertAlmostEqual(b["pos"], 0.0)
+
+    def test_oversell_beyond_basis_only_realizes_held_portion(self):
+        # 持仓 1 股@100,卖出 2 股@110:仅对持有的 1 股计盈亏(10),剩余翻空
+        trades = [trade_row("2025/01/02", "ABC", "ABC Ltd", "HKD", 2, 220.0)]
+
+        book = longbridge_tax.realized_by_ticker(trades, {("HKD", "ABC"): (1.0, 100.0, "ABC Ltd")})
+
+        b = book[("HKD", "ABC")]
+        self.assertEqual(round(b["realized"], 2), 10.0)
+        self.assertTrue(b["shorted"])
+
     def test_reports_group_tax_summary_by_currency_and_fx_rate(self):
         statement = self.multi_currency_statement()
 

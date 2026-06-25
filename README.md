@@ -74,10 +74,14 @@ The script prints realized total, dividends and interest so you can sanity-check
 
 ## How realized P&L is computed
 
-Average-cost per instrument and currency (long side, Longbridge cash account). `clear_amount` is signed
-and already net of fees; realized accrues only on SELLs, so positions still held at year-end
-contribute 0 (unrealized, not taxable). The prior-December `equity_holdings.cost_price` seeds
-carried-in positions. Money-market funds are shown but excluded from the realized headline.
+Average-cost per instrument and currency. `clear_amount` is signed and already net of fees;
+realized P&L accrues only when a trade *reduces* the open position (selling a long, or buying
+back a short), so whatever position is still open at year-end — long **or** short — contributes
+0 (unrealized, not taxable). The prior-December `equity_holdings.cost_price` seeds carried-in
+positions. A position going negative (a cash account can't truly short — this usually means
+missing cost basis, e.g. shares transferred in or a sell recorded before its buy) is flagged
+for review rather than booking the full sale proceeds as profit. Money-market funds are shown
+but excluded from the realized headline.
 **Capital-gains tax must be combined across brokers** — the standalone figure here nets
 against e.g. Futu within `财产转让所得`. Details in [`SKILL.md`](SKILL.md).
 

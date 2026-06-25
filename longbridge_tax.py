@@ -191,12 +191,20 @@ def export(file_key):
 
 
 def realized_by_ticker(trades, opening):
-    """Average-cost realized P&L per instrument (long-side; Longbridge cash account).
+    """Average-cost realized P&L per instrument (long *and* short side).
 
     `net` is clear_amount (signed: BUY<0 cash out, SELL>0 cash in), already net of fees.
-    Realized accrues only on SELLs, so positions still held at year-end contribute 0
-    (their gain is unrealized and not taxable this year). `opening` seeds carried-in
-    holdings from the prior-December statement so their cost basis is correct.
+    `pos` is the signed open quantity (long>0, short<0) and `avg` the average price per
+    unit of that open position. Realized P&L accrues only when a trade *reduces* the open
+    position (selling a long, or buying back a short); opening or adding to a position just
+    re-averages the cost. Whatever position is still open at year-end (long OR short)
+    contributes 0 — its gain is unrealized and not taxable this year. `opening` seeds
+    carried-in holdings from the prior-December statement so their cost basis is correct.
+
+    NB: a Longbridge cash account cannot truly short, so a position going negative usually
+    signals *missing cost basis* (e.g. shares transferred in, or a sell recorded before its
+    buy), not a real short. We flag those (`shorted`) so they can be reviewed rather than
+    silently booking the whole sale proceeds as profit (the old long-only bug).
     """
     book = {}
     for raw_key, (qty, cp, name) in opening.items():
@@ -205,27 +213,38 @@ def realized_by_ticker(trades, opening):
         else:
             currency, code = "", raw_key
         key = ((currency or "").upper(), str(code))
-        book[key] = {"name": name, "currency": key[0], "pos": qty, "cost": qty * cp,
-                     "realized": 0.0, "nf": 0, "sumnet": 0.0}
+        book[key] = {"name": name, "currency": key[0], "pos": qty, "avg": cp,
+                     "realized": 0.0, "nf": 0, "sumnet": 0.0, "shorted": False}
     for t in sorted(trades, key=lambda r: r[0]):        # by trade_date
         if t[5] not in ("stock", "option"):             # funds handled separately
             continue
         currency, code, name, net, q = (t[6] or "").upper(), t[2], t[3], t[11], t[7]
+        if q <= 0:                                       # nothing to do with a 0-qty line
+            continue
         key = (currency, code)
         if key not in book and ("", code) in book:
             book[key] = book.pop(("", code))
             book[key]["currency"] = currency
-        b = book.setdefault(key, {"name": "", "currency": currency, "pos": 0.0, "cost": 0.0,
-                                  "realized": 0.0, "nf": 0, "sumnet": 0.0})
+        b = book.setdefault(key, {"name": "", "currency": currency, "pos": 0.0, "avg": 0.0,
+                                  "realized": 0.0, "nf": 0, "sumnet": 0.0, "shorted": False})
         if name and not b["name"]:
             b["name"] = name
         b["nf"] += 1; b["sumnet"] += net
-        if net < 0:                                     # BUY -> add to cost basis
-            b["cost"] += -net; b["pos"] += q
-        else:                                           # SELL -> realize vs average cost
-            avg = b["cost"] / b["pos"] if b["pos"] > 1e-9 else 0.0
-            b["realized"] += net - avg * q
-            b["cost"] -= avg * q; b["pos"] -= q
+        dq = q if net < 0 else -q                        # signed trade qty (BUY>0, SELL<0)
+        price = abs(net) / q                             # per-unit cash, fees included
+        pos = b["pos"]
+        if pos == 0 or (pos > 0) == (dq > 0):            # opening / adding -> re-average
+            b["avg"] = (abs(pos) * b["avg"] + q * price) / (abs(pos) + q)
+            b["pos"] = pos + dq
+        else:                                            # reducing / closing the position
+            closed = min(q, abs(pos))
+            # long closed by a sell: (sell - avg); short closed by a buy: (avg - buy)
+            b["realized"] += (price - b["avg"]) * closed if pos > 0 else (b["avg"] - price) * closed
+            b["pos"] = pos + dq
+            if q > abs(pos):                             # flipped through zero -> new leg
+                b["avg"] = price
+        if b["pos"] < -1e-9:                             # went/stayed net short
+            b["shorted"] = True
     return book
 
 
@@ -332,11 +351,16 @@ def main(argv=None):
         if b["nf"] == 0 and abs(b["realized"]) < 1e-6:   # untouched carried holding -> skip
             continue
         rz = round(b["realized"], 2); totals[currency] += rz
-        held = b["pos"] > 1e-6
+        held = abs(b["pos"]) > 1e-6
+        notes = []
+        if held:
+            notes.append("年末仍有持仓(空头),未实现不计入" if b["pos"] < 0 else "年末仍有持仓,未实现不计入")
+        if b["shorted"]:
+            notes.append("⚠ 出现负持仓:疑似缺少成本基础(转入/卖出早于买入),请核对")
         row = [code, b["name"], currency, b["nf"], round(b["sumnet"], 2), rz]
         if fx_rates:
             row.append(rmb(rz, currency))
-        row.append("年末仍有持仓,未实现不计入" if held else "")
+        row.append(";".join(notes))
         rows.append(row)
     h3 = ["代码", "名称", "货币", "成交笔数", "清算净额合计(原币)", "已实现盈亏(原币)"]
     if fx_rates:
@@ -406,6 +430,10 @@ def main(argv=None):
     print(f"  分红(corps+):    {div_summary or '0.00'} ;  融资利息: {interest_summary or '0.00'}")
     if fx_rates:
         print(f"  税务汇总:        本账户应纳税额估算 RMB {tax_total_rmb:,.2f}")
+    shorted = [f"{ccy}:{code}" for (ccy, code), b in book.items() if b.get("shorted")]
+    if shorted:
+        print(f"  ⚠ 负持仓提醒:    {', '.join(sorted(shorted))} 出现负持仓——通常意味着缺少买入/成本基础"
+              f"(如转入股票、卖出记录早于买入),已实现盈亏可能不准,请核对后再报税。", file=sys.stderr)
     return 0
 
 
