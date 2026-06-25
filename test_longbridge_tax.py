@@ -61,6 +61,67 @@ class CurrencyHandlingTest(unittest.TestCase):
         self.assertEqual(round(b["realized"], 2), 10.0)
         self.assertTrue(b["shorted"])
 
+    def _short_statement(self):
+        # open short 100@10 (+1000), cover 60@9 (-540) -> realized 60, still short 40 at year-end
+        return {
+            "stock_trades": [
+                {"trade_date": "2025.01.02", "settle_date": "2025.01.05", "code": "HK700",
+                 "name": "Tencent", "direction": "SELL", "currency": "HKD", "trade_quantity": "100",
+                 "trade_price": "10", "trade_amount": "1000", "clear_amount": "1000"},
+                {"trade_date": "2025.03.02", "settle_date": "2025.03.05", "code": "HK700",
+                 "name": "Tencent", "direction": "BUY", "currency": "HKD", "trade_quantity": "60",
+                 "trade_price": "9", "trade_amount": "540", "clear_amount": "-540"},
+            ],
+            "corps": [], "interests": [], "asset": [],
+        }
+
+    def _run_negpos(self, outdir, extra):
+        with (
+            patch.object(longbridge_tax, "ensure_cli"),
+            patch.object(longbridge_tax, "list_keys", return_value={"202501": "k1"}),
+            patch.object(longbridge_tax, "export", return_value=self._short_statement()),
+        ):
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                longbridge_tax.main(["--year", "2025", "-o", outdir, *extra])
+
+    def _read(self, outdir, name):
+        with (Path(outdir) / name).open(encoding="utf-8-sig", newline="") as fp:
+            return list(csv.DictReader(fp))
+
+    def test_negative_position_flag_includes_in_totals_and_warns(self):
+        with tempfile.TemporaryDirectory() as outdir:
+            self._run_negpos(outdir, [])      # default flag
+            realized = self._read(outdir, "longbridge_2025_已实现盈亏_按标的.csv")
+            detail = next(r for r in realized if r["代码"] == "HK700")
+            self.assertEqual(float(detail["已实现盈亏(原币)"]), 60.0)
+            self.assertIn("负持仓", detail["备注"])
+            total = next(r for r in realized if r["代码"] == "合计" and r["货币"] == "HKD")
+            self.assertEqual(float(total["已实现盈亏(原币)"]), 60.0)
+            tax = self._read(outdir, "longbridge_2025_税务汇总.csv")
+            cap = next(r for r in tax if r["所得项目"].startswith("财产转让") and r["货币"] == "HKD")
+            self.assertEqual(float(cap["金额(原币)"]), 60.0)
+
+    def test_negative_position_exclude_drops_from_totals_and_tax(self):
+        with tempfile.TemporaryDirectory() as outdir:
+            self._run_negpos(outdir, ["--on-negative-position", "exclude"])
+            realized = self._read(outdir, "longbridge_2025_已实现盈亏_按标的.csv")
+            detail = next(r for r in realized if r["代码"] == "HK700")
+            self.assertEqual(float(detail["已实现盈亏(原币)"]), 60.0)   # still shown for transparency
+            self.assertIn("排除", detail["备注"])
+            self.assertFalse([r for r in realized if r["代码"] == "合计"])  # nothing left to total
+            tax = self._read(outdir, "longbridge_2025_税务汇总.csv")
+            self.assertFalse([r for r in tax if r["所得项目"].startswith("财产转让")])
+
+    def test_negative_position_short_includes_without_warning(self):
+        with tempfile.TemporaryDirectory() as outdir:
+            self._run_negpos(outdir, ["--on-negative-position", "short"])
+            realized = self._read(outdir, "longbridge_2025_已实现盈亏_按标的.csv")
+            detail = next(r for r in realized if r["代码"] == "HK700")
+            self.assertIn("做空", detail["备注"])
+            self.assertNotIn("⚠", detail["备注"])
+            total = next(r for r in realized if r["代码"] == "合计" and r["货币"] == "HKD")
+            self.assertEqual(float(total["已实现盈亏(原币)"]), 60.0)
+
     def test_reports_group_tax_summary_by_currency_and_fx_rate(self):
         statement = self.multi_currency_statement()
 

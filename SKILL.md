@@ -65,6 +65,10 @@ For `--year 2025`, if no rate is passed, the script uses the 2025-12-31 PBOC/CFE
 parity defaults: `HKD=0.90322`, `USD=7.0288`. Explicit `--rate` / `--fx-rate` values override
 the built-in defaults.
 
+`--on-negative-position {flag,exclude,short}` controls how negative/short positions are
+handled (default `flag`) — see **Negative positions** below; treat a `flag` run that reports
+negative positions as needing user confirmation, not a final answer.
+
 | Output (utf-8-sig) | Contents |
 |---|---|
 | `longbridge_<YEAR>_成交明细.csv` | stock / option / fund trades; `清算金额` already net of fees |
@@ -74,6 +78,32 @@ the built-in defaults.
 | `longbridge_<YEAR>_税务汇总.csv` | tax summary by currency: gains / dividends / interest + tax due |
 
 The script prints realized total, dividends and interest so you can sanity-check.
+
+## Negative positions — STOP and confirm with the user
+
+A Longbridge **cash account cannot really short**, so when the reconstruction drives an
+instrument to a **negative position**, it almost always means **missing cost basis**, not a
+genuine short — e.g. shares transferred in (转入), a sell recorded before its buy, or the
+prior-December `cost_price` was `N/A` and got skipped. By default the script computes it as a
+symmetric short, **includes it in the totals**, and warns.
+
+**When you (Claude) run the script and see `NEGATIVE_POSITION` on stderr (or a `⚠ 负持仓`
+note in `已实现盈亏_按标的.csv`), do NOT silently accept the default number.** Surface it and
+let the user choose the口径 before reporting any tax figure:
+
+1. **补成本基础重跑(最准 / recommended)** — the instrument is real but its opening cost is
+   missing. Find the correct carried-in cost (prior-year purchase price / transfer-in cost)
+   and re-run so the basis is seeded correctly. This is the only option that yields a correct
+   realized number.
+2. **先排除待核对** — re-run with `--on-negative-position=exclude`; the flagged instrument is
+   dropped from the totals and 税务汇总 so a data gap doesn't pollute the tax figure, and it's
+   listed separately for manual handling.
+3. **确认是做空** — only if the user confirms it is a genuine short, re-run with
+   `--on-negative-position=short` to include it without the warning.
+
+Explain which instruments are affected and roughly how much they move the total, then re-run
+with the chosen flag (and corrected opening data for option 1). Never report a tax number from
+a `flag` run that still has unresolved negative positions without telling the user.
 
 ## How it works
 

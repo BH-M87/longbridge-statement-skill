@@ -257,6 +257,12 @@ def main(argv=None):
     ap.add_argument("--fx-rate", action="append", default=[], metavar="CCY=RATE",
                     help="currency-specific RMB FX rate, e.g. HKD=0.90322 or USD=7.10; may repeat; "
                          "defaults to built-in year-end rates when available")
+    ap.add_argument("--on-negative-position", choices=["flag", "exclude", "short"], default="flag",
+                    help="how to treat instruments whose position goes negative (on a cash account "
+                         "this usually means MISSING cost basis, not a real short): "
+                         "'flag' (default) = compute & include in totals but warn; "
+                         "'exclude' = drop from totals/tax pending manual review; "
+                         "'short' = treat as a confirmed genuine short (compute, include, no warning)")
     args = ap.parse_args(argv)
     try:
         fx_rates = parse_fx_rates(args.year, args.rate, args.fx_rate)
@@ -350,13 +356,21 @@ def main(argv=None):
         b = book[key]
         if b["nf"] == 0 and abs(b["realized"]) < 1e-6:   # untouched carried holding -> skip
             continue
-        rz = round(b["realized"], 2); totals[currency] += rz
+        rz = round(b["realized"], 2)
+        excluded = b["shorted"] and args.on_negative_position == "exclude"
+        if not excluded:
+            totals[currency] += rz
         held = abs(b["pos"]) > 1e-6
         notes = []
         if held:
             notes.append("年末仍有持仓(空头),未实现不计入" if b["pos"] < 0 else "年末仍有持仓,未实现不计入")
         if b["shorted"]:
-            notes.append("⚠ 出现负持仓:疑似缺少成本基础(转入/卖出早于买入),请核对")
+            if args.on_negative_position == "short":
+                notes.append("做空(已确认),已计入")
+            elif excluded:
+                notes.append("⚠ 负持仓:已从合计/税务中排除,待核对成本基础")
+            else:
+                notes.append("⚠ 出现负持仓:疑似缺少成本基础(转入/卖出早于买入),请核对")
         row = [code, b["name"], currency, b["nf"], round(b["sumnet"], 2), rz]
         if fx_rates:
             row.append(rmb(rz, currency))
@@ -430,10 +444,16 @@ def main(argv=None):
     print(f"  分红(corps+):    {div_summary or '0.00'} ;  融资利息: {interest_summary or '0.00'}")
     if fx_rates:
         print(f"  税务汇总:        本账户应纳税额估算 RMB {tax_total_rmb:,.2f}")
-    shorted = [f"{ccy}:{code}" for (ccy, code), b in book.items() if b.get("shorted")]
-    if shorted:
-        print(f"  ⚠ 负持仓提醒:    {', '.join(sorted(shorted))} 出现负持仓——通常意味着缺少买入/成本基础"
-              f"(如转入股票、卖出记录早于买入),已实现盈亏可能不准,请核对后再报税。", file=sys.stderr)
+    shorted = sorted(f"{ccy}:{code}" for (ccy, code), b in book.items() if b.get("shorted"))
+    if shorted and args.on_negative_position == "flag":
+        print(f"  ⚠ 负持仓提醒(NEGATIVE_POSITION):  {', '.join(shorted)} 出现负持仓——现金账户通常意味着"
+              f"缺少买入/成本基础(如转入股票、卖出记录早于买入),已按对称做空口径计入合计,可能不准。\n"
+              f"    处理方式:① 补上对应标的的期初成本后重跑(最准);"
+              f"② --on-negative-position=exclude 先从合计/税务中排除待核对;"
+              f"③ 若确实是做空,--on-negative-position=short 确认计入。", file=sys.stderr)
+    elif shorted and args.on_negative_position == "exclude":
+        print(f"  ⚠ 已排除负持仓标的(NEGATIVE_POSITION):  {', '.join(shorted)} 已从合计/税务中排除,待核对成本基础。",
+              file=sys.stderr)
     return 0
 
 
