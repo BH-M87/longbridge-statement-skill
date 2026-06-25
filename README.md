@@ -48,11 +48,17 @@ If a CLI call fails because you're not logged in, the script points you to
 ## Usage
 
 ```bash
-python3 longbridge_tax.py --year 2025 -o out/ --rate 0.90322
+python3 longbridge_tax.py --year 2025 -o out/ --rate 0.90322 --fx-rate USD=7.10
 ```
 
-`--rate` is optional — the HKD→RMB year-end mid-rate (中间价); when given, an RMB column is
-added and tax is computed.
+`--rate` is kept as the shorthand for the HKD→RMB year-end mid-rate (中间价). If your
+Longbridge statements include more than one currency, pass one `--fx-rate CCY=RATE` per
+currency, such as `--fx-rate HKD=0.90322 --fx-rate USD=7.10`. Amounts are grouped by
+currency first; RMB/tax columns are filled only when that currency has a matching rate.
+
+For `--year 2025`, if you do not pass any rate, the script uses the 2025-12-31 PBOC/CFETS
+central parity defaults: `HKD=0.90322`, `USD=7.0288`. Passing `--rate` or `--fx-rate`
+overrides the built-in defaults.
 
 ### Outputs (UTF-8-BOM, Excel-friendly)
 
@@ -62,13 +68,13 @@ added and tax is computed.
 | `longbridge_<YEAR>_股息利息现金流.csv` | dividends (corps), financing interest, withdrawals |
 | `longbridge_<YEAR>_已实现盈亏_按标的.csv` | realized P&L per instrument (average-cost) |
 | `longbridge_<YEAR>_账户净值.csv` | per-month asset total (cross-check) |
-| `longbridge_<YEAR>_税务汇总.csv` | tax summary — capital gains / dividends / interest + tax due |
+| `longbridge_<YEAR>_税务汇总.csv` | tax summary by currency — capital gains / dividends / interest + tax due |
 
 The script prints realized total, dividends and interest so you can sanity-check.
 
 ## How realized P&L is computed
 
-Average-cost per instrument (long side, Longbridge cash account). `clear_amount` is signed
+Average-cost per instrument and currency (long side, Longbridge cash account). `clear_amount` is signed
 and already net of fees; realized accrues only on SELLs, so positions still held at year-end
 contribute 0 (unrealized, not taxable). The prior-December `equity_holdings.cost_price` seeds
 carried-in positions. Money-market funds are shown but excluded from the realized headline.

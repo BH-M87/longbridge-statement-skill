@@ -53,10 +53,17 @@ not the Longbridge MCP.)
 ## Quick Start
 
 ```bash
-python3 longbridge_tax.py --year 2025 -o out/ --rate 0.90322
+python3 longbridge_tax.py --year 2025 -o out/ --rate 0.90322 --fx-rate USD=7.10
 ```
 
-`--rate` (optional) is the HKD→RMB year-end 中间价; it adds an RMB column and computes tax.
+`--rate` (optional) is the HKD→RMB year-end 中间价 shorthand. For multi-currency statements,
+pass one `--fx-rate CCY=RATE` per currency, e.g. `--fx-rate HKD=0.90322 --fx-rate USD=7.10`.
+Amounts are grouped by currency first; RMB/tax columns are filled only when that currency
+has a matching rate.
+
+For `--year 2025`, if no rate is passed, the script uses the 2025-12-31 PBOC/CFETS central
+parity defaults: `HKD=0.90322`, `USD=7.0288`. Explicit `--rate` / `--fx-rate` values override
+the built-in defaults.
 
 | Output (utf-8-sig) | Contents |
 |---|---|
@@ -64,7 +71,7 @@ python3 longbridge_tax.py --year 2025 -o out/ --rate 0.90322
 | `longbridge_<YEAR>_股息利息现金流.csv` | dividends (corps), financing interest, withdrawals |
 | `longbridge_<YEAR>_已实现盈亏_按标的.csv` | realized P&L per instrument (average-cost) |
 | `longbridge_<YEAR>_账户净值.csv` | per-month asset total (cross-check) |
-| `longbridge_<YEAR>_税务汇总.csv` | tax summary: gains / dividends / interest + tax due (with `--rate`) |
+| `longbridge_<YEAR>_税务汇总.csv` | tax summary by currency: gains / dividends / interest + tax due |
 
 The script prints realized total, dividends and interest so you can sanity-check.
 
@@ -104,10 +111,16 @@ The script prints realized total, dividends and interest so you can sanity-check
 6. **Capital-gains tax must be combined across accounts.** This skill is Longbridge-only;
    its 税务汇总 shows the standalone figure. Net it against your other brokers (e.g. Futu)
    within `财产转让所得` before computing the final capital-gains tax.
+7. **Currencies are not interchangeable.** Keep USD/HKD/etc. in separate buckets for
+   average cost, realized P&L, dividends, interest, and RMB conversion. Use `--fx-rate`
+   for every currency that needs tax/RMB output.
+8. **Default FX rates are year-scoped.** 2025 has built-in PBOC/CFETS 2025-12-31 defaults
+   for HKD and USD. Other years need explicit rates until their defaults are added.
 
 ## Tax note (个税 境外所得)
 
-Convert HKD→RMB at the year-end 人民币汇率中间价 (`--rate`). `财产转让所得` (capital gains,
+Convert each currency to RMB at the year-end 人民币汇率中间价 (`--rate` for HKD, repeated
+`--fx-rate CCY=RATE` for other currencies). `财产转让所得` (capital gains,
 20%) nets gains/losses within the same market across accounts; `利息股息红利所得`
 (dividends, flat 20%) is taxed standalone with no deductions. Confirm netting scope,
 foreign-tax credit, fund-income classification, and FX 口径 with a tax advisor.

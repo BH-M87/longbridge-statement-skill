@@ -14,7 +14,7 @@ costed correctly. Cash dividends live in `corps` (corporate actions); financing 
 in `interests` (it is a cost you paid, not income).
 
 Usage:
-    python3 longbridge_tax.py --year 2025 -o OUTDIR [--rate 0.90322]
+    python3 longbridge_tax.py --year 2025 -o OUTDIR [--rate 0.90322] [--fx-rate USD=7.1]
 
 Prerequisite: the official Longbridge CLI installed and authenticated, so that
 `longbridge statement --type monthly --format json` works in your shell. This script
@@ -25,14 +25,24 @@ Outputs (CSV, utf-8-sig; no personal data is embedded — everything comes from 
     longbridge_<YEAR>_股息利息现金流.csv      dividends(corps)/interest/withdrawals
     longbridge_<YEAR>_已实现盈亏_按标的.csv    realized P&L per instrument (average-cost)
     longbridge_<YEAR>_账户净值.csv           per-month asset total (cross-check)
-    longbridge_<YEAR>_税务汇总.csv           tax summary: gains/dividends/interest + tax due (--rate)
+    longbridge_<YEAR>_税务汇总.csv           tax summary: gains/dividends/interest + tax due (--rate/--fx-rate)
 """
 from __future__ import annotations
 import argparse, csv, json, os, shutil, subprocess, sys
+from collections import defaultdict
 
 # account_balance_changes biz_codes that are internal/round-trip, excluded from cashflow view
 INTERNAL_BIZ = {"LMMFP", "LMMFR", "LIPOREFD", "LIPODR", "LINTDR"}
 DIV_HINTS = ("股息", "分红", "dividend", "div", "i/d", "f/d")   # to spot dividends anywhere
+
+# PBOC/CFETS RMB central parity rates on the tax year's final calendar day.
+# Source for 2025: https://www.pbc.gov.cn/zhengcehuobisi/125207/125217/125925/2025123109021714424/index.html
+DEFAULT_FX_RATES_BY_YEAR = {
+    2025: {
+        "HKD": 0.90322,
+        "USD": 7.0288,
+    },
+}
 
 
 def d(s):                                   # '2025.01.07' -> '2025/01/07'
@@ -44,6 +54,36 @@ def num(s):
         return float(str(s).replace(",", ""))
     except (TypeError, ValueError):
         return 0.0
+
+
+def parse_fx_rates(year, rate, fx_rate_args):
+    rates = dict(DEFAULT_FX_RATES_BY_YEAR.get(year, {})) if rate is None and not fx_rate_args else {}
+    if rate is not None:
+        rates["HKD"] = rate
+    for item in fx_rate_args or []:
+        if "=" not in item:
+            raise argparse.ArgumentTypeError("--fx-rate must be in CCY=RATE format, e.g. USD=7.1")
+        ccy, raw_rate = item.split("=", 1)
+        ccy = ccy.strip().upper()
+        if not ccy:
+            raise argparse.ArgumentTypeError("--fx-rate currency cannot be empty")
+        try:
+            rates[ccy] = float(raw_rate)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"--fx-rate has invalid rate: {item}") from exc
+    return rates
+
+
+def sums_by_currency(rows, amount_index, currency_index):
+    totals = defaultdict(float)
+    for row in rows:
+        totals[(row[currency_index] or "").upper()] += row[amount_index]
+    return dict(totals)
+
+
+def amount_to_rmb(value, currency, fx_rates):
+    rate = fx_rates.get((currency or "").upper())
+    return round(value * rate, 2) if rate is not None else ""
 
 
 CLI_DOCS = "https://open.longbridge.com/zh-CN/docs/cli/"
@@ -159,15 +199,24 @@ def realized_by_ticker(trades, opening):
     holdings from the prior-December statement so their cost basis is correct.
     """
     book = {}
-    for code, (qty, cp, name) in opening.items():
-        book[code] = {"name": name, "pos": qty, "cost": qty * cp,
-                      "realized": 0.0, "nf": 0, "sumnet": 0.0}
+    for raw_key, (qty, cp, name) in opening.items():
+        if isinstance(raw_key, tuple):
+            currency, code = raw_key
+        else:
+            currency, code = "", raw_key
+        key = ((currency or "").upper(), str(code))
+        book[key] = {"name": name, "currency": key[0], "pos": qty, "cost": qty * cp,
+                     "realized": 0.0, "nf": 0, "sumnet": 0.0}
     for t in sorted(trades, key=lambda r: r[0]):        # by trade_date
         if t[5] not in ("stock", "option"):             # funds handled separately
             continue
-        code, name, net, q = t[2], t[3], t[11], t[7]
-        b = book.setdefault(code, {"name": "", "pos": 0.0, "cost": 0.0,
-                                   "realized": 0.0, "nf": 0, "sumnet": 0.0})
+        currency, code, name, net, q = (t[6] or "").upper(), t[2], t[3], t[11], t[7]
+        key = (currency, code)
+        if key not in book and ("", code) in book:
+            book[key] = book.pop(("", code))
+            book[key]["currency"] = currency
+        b = book.setdefault(key, {"name": "", "currency": currency, "pos": 0.0, "cost": 0.0,
+                                  "realized": 0.0, "nf": 0, "sumnet": 0.0})
         if name and not b["name"]:
             b["name"] = name
         b["nf"] += 1; b["sumnet"] += net
@@ -185,9 +234,16 @@ def main(argv=None):
     ap.add_argument("--year", type=int, required=True, help="tax year, e.g. 2025")
     ap.add_argument("-o", "--outdir", default="longbridge_parsed", help="output directory")
     ap.add_argument("--rate", type=float, default=None,
-                    help="HKD->RMB rate (e.g. year-end 中间价 0.90322); adds an RMB column")
+                    help="HKD->RMB rate shorthand, same as --fx-rate HKD=RATE")
+    ap.add_argument("--fx-rate", action="append", default=[], metavar="CCY=RATE",
+                    help="currency-specific RMB FX rate, e.g. HKD=0.90322 or USD=7.10; may repeat; "
+                         "defaults to built-in year-end rates when available")
     args = ap.parse_args(argv)
-    year, rate = args.year, args.rate
+    try:
+        fx_rates = parse_fx_rates(args.year, args.rate, args.fx_rate)
+    except argparse.ArgumentTypeError as exc:
+        ap.error(str(exc))
+    year = args.year
     os.makedirs(args.outdir, exist_ok=True)
 
     ensure_cli()                                     # offer to install/login if missing (asks first)
@@ -206,7 +262,7 @@ def main(argv=None):
             qty = num(h.get("ledger_quantity"))
             if cp in (None, "", "N/A") or qty <= 0:      # skip funds (cost N/A) & flat lines
                 continue
-            opening[str(h["code"])] = (qty, num(cp), h.get("name", ""))
+            opening[((h.get("currency") or "").upper(), str(h["code"]))] = (qty, num(cp), h.get("name", ""))
 
     for m in range(1, 13):
         ym = f"{year}{m:02d}"
@@ -255,71 +311,101 @@ def main(argv=None):
         with open(os.path.join(args.outdir, name), "w", newline="", encoding="utf-8-sig") as fp:
             wr = csv.writer(fp); wr.writerow(header); [wr.writerow(r) for r in rows]
 
-    def rmb(v): return round(v * rate, 2) if rate else ""
+    def rmb(v, currency): return amount_to_rmb(v, currency, fx_rates)
 
     # 1) 成交明细
+    trade_total_rows = [["合计", "", "", "", "", "", ccy, "", "", "", "", round(total, 2)]
+                        for ccy, total in sorted(sums_by_currency(trades, 11, 6).items())]
     w(f"longbridge_{year}_成交明细.csv",
       ["成交日期", "交收日期", "代码", "名称", "方向", "品类", "货币", "数量", "价格", "成交金额", "手续费", "清算金额(净额)"],
-      sorted(trades) + [["合计", "", "", "", "", "", "", "", "", "", "",
-                         round(sum(t[11] for t in trades), 2)]])
+      sorted(trades) + trade_total_rows)
 
     # 2) 股息利息现金流
     w(f"longbridge_{year}_股息利息现金流.csv", ["日期", "类型", "货币", "金额", "备注"], sorted(cashflows))
 
     # 3) 已实现盈亏 按标的
     book = realized_by_ticker(trades, opening)
-    rows, total = [], 0.0
-    for code in sorted(book, key=lambda c: book[c]["realized"]):
-        b = book[code]
+    rows, totals = [], defaultdict(float)
+    for key in sorted(book, key=lambda c: (c[0], book[c]["realized"])):
+        currency, code = key
+        b = book[key]
         if b["nf"] == 0 and abs(b["realized"]) < 1e-6:   # untouched carried holding -> skip
             continue
-        rz = round(b["realized"], 2); total += rz
+        rz = round(b["realized"], 2); totals[currency] += rz
         held = b["pos"] > 1e-6
-        row = [code, b["name"], b["nf"], round(b["sumnet"], 2), rz]
-        if rate is not None:
-            row.append(rmb(rz))
+        row = [code, b["name"], currency, b["nf"], round(b["sumnet"], 2), rz]
+        if fx_rates:
+            row.append(rmb(rz, currency))
         row.append("年末仍有持仓,未实现不计入" if held else "")
         rows.append(row)
-    h3 = ["代码", "名称", "成交笔数", "清算净额合计(HKD)", "已实现盈亏(HKD)"]
-    if rate is not None:
-        h3.append(f"已实现盈亏(RMB,×{rate})")
+    h3 = ["代码", "名称", "货币", "成交笔数", "清算净额合计(原币)", "已实现盈亏(原币)"]
+    if fx_rates:
+        h3.append("已实现盈亏(RMB)")
     h3.append("备注")
-    tot3 = ["合计", "", "", "", round(total, 2)] + ([rmb(total)] if rate else []) + ["股票/期权已实现;货基另计,未并入"]
-    w(f"longbridge_{year}_已实现盈亏_按标的.csv", h3, rows + [tot3])
+    total_rows = []
+    for currency, total in sorted(totals.items()):
+        total_rows.append(["合计", "", currency, "", "", round(total, 2)]
+                          + ([rmb(total, currency)] if fx_rates else [])
+                          + ["股票/期权已实现;货基另计,未并入"])
+    w(f"longbridge_{year}_已实现盈亏_按标的.csv", h3, rows + total_rows)
 
     # 4) 账户净值
     w(f"longbridge_{year}_账户净值.csv", ["月份", "货币", "资产总值(月末)"], navrows)
 
     # 5) 税务汇总
-    div = sum(c[3] for c in cashflows if "分红" in c[1] and c[3] > 0)
-    interest = sum(c[3] for c in cashflows if "利息" in c[1])
-    r = rate or 0
-    div_tax = round(div * r * 0.20, 2) if rate else ""
-    cap_tax = (round(total * r * 0.20, 2) if (rate and total > 0) else (0.0 if rate else ""))
-    th = ["所得项目", "金额(HKD)"] + (["金额(RMB)", "应纳税额(RMB)"] if rate else []) + ["税率", "备注"]
-    trows = [
-        ["财产转让所得·已实现(本账户股票/期权)", round(total, 2)] + ([rmb(total), cap_tax] if rate else [])
-        + ["20%", "盈利才计税且需与其他账户同类所得盈亏合并;本表仅本账户,亏损不计税"],
-        ["利息股息红利所得·现金分红(毛额)", round(div, 2)] + ([rmb(div), div_tax] if rate else [])
-        + ["20%", "单独计税,不可扣成本/不可与亏损相抵;境外已预扣可申请抵免"],
-        ["(备查)融资利息支出", round(interest, 2)] + ([rmb(interest), ""] if rate else [])
-        + ["—", "非收入;做财产转让可作合理费用参考"],
-    ]
-    if rate:
-        trows.append(["合计·本账户应纳税额(估)", "", "", round((div_tax or 0) + (cap_tax or 0), 2), "",
+    divs = defaultdict(float)
+    interests = defaultdict(float)
+    for c in cashflows:
+        currency = (c[2] or "").upper()
+        if "分红" in c[1] and c[3] > 0:
+            divs[currency] += c[3]
+        if "利息" in c[1]:
+            interests[currency] += c[3]
+
+    th = ["所得项目", "货币", "金额(原币)"] + (["金额(RMB)", "应纳税额(RMB)"] if fx_rates else []) + ["税率", "备注"]
+    trows, tax_total_rmb = [], 0.0
+    currencies = sorted(set(totals) | set(divs) | set(interests))
+    for currency in currencies:
+        total = round(totals.get(currency, 0.0), 2)
+        div = round(divs.get(currency, 0.0), 2)
+        interest = round(interests.get(currency, 0.0), 2)
+        cap_rmb = rmb(total, currency)
+        div_rmb = rmb(div, currency)
+        interest_rmb = rmb(interest, currency)
+        cap_tax = round(cap_rmb * 0.20, 2) if cap_rmb != "" and total > 0 else (0.0 if cap_rmb != "" else "")
+        div_tax = round(div_rmb * 0.20, 2) if div_rmb != "" else ""
+        if isinstance(cap_tax, float):
+            tax_total_rmb += cap_tax
+        if isinstance(div_tax, float):
+            tax_total_rmb += div_tax
+        trows.append(["财产转让所得·已实现(本账户股票/期权)", currency, total]
+                     + ([cap_rmb, cap_tax] if fx_rates else [])
+                     + ["20%", "盈利才计税且需与其他账户同类所得盈亏合并;本表仅本账户,亏损不计税"])
+        trows.append(["利息股息红利所得·现金分红(毛额)", currency, div]
+                     + ([div_rmb, div_tax] if fx_rates else [])
+                     + ["20%", "单独计税,不可扣成本/不可与亏损相抵;境外已预扣可申请抵免"])
+        trows.append(["(备查)融资利息支出", currency, interest]
+                     + ([interest_rmb, ""] if fx_rates else [])
+                     + ["—", "非收入;做财产转让可作合理费用参考"])
+    if fx_rates:
+        trows.append(["合计·本账户应纳税额(估)", "", "", "", round(tax_total_rmb, 2), "",
                       "= 分红税 + 财产转让税(本账户);财产转让最终税额须合并其他账户后确定"])
     else:
-        trows.append(["提示", "传 --rate <年末中间价> 可计算人民币与应纳税额"])
+        trows.append(["提示", "", "传 --rate <HKD年末中间价> 或 --fx-rate <币种=年末中间价> 可计算人民币与应纳税额"])
     w(f"longbridge_{year}_税务汇总.csv", th, trows)
 
     print(f"Longbridge {year} -> {args.outdir}/")
-    print(f"  成交明细:        {len(trades)} 笔 (股票/期权/基金), Σ清算净额={sum(t[11] for t in trades):,.2f}")
+    trade_summary = ", ".join(f"{ccy or 'UNKNOWN'} {total:,.2f}"
+                              for ccy, total in sorted(sums_by_currency(trades, 11, 6).items()))
+    print(f"  成交明细:        {len(trades)} 笔 (股票/期权/基金), Σ清算净额={trade_summary}")
     print(f"  股息利息现金流:  {len(cashflows)} 行")
-    print(f"  已实现盈亏(股票): Σ={total:,.2f} HKD" + (f" = RMB {total*rate:,.2f}" if rate else ""))
-    print(f"  分红(corps+):    {div:,.2f} HKD ;  融资利息: {interest:,.2f} HKD")
-    if rate:
-        print(f"  税务汇总:        分红税 RMB {div_tax:,.2f}"
-              + (f" + 财产转让税 RMB {cap_tax:,.2f}" if total > 0 else " (财产转让本账户亏损/无盈利,不计税)"))
+    realized_summary = ", ".join(f"{ccy or 'UNKNOWN'} {total:,.2f}" for ccy, total in sorted(totals.items()))
+    div_summary = ", ".join(f"{ccy or 'UNKNOWN'} {total:,.2f}" for ccy, total in sorted(divs.items()))
+    interest_summary = ", ".join(f"{ccy or 'UNKNOWN'} {total:,.2f}" for ccy, total in sorted(interests.items()))
+    print(f"  已实现盈亏(股票): Σ={realized_summary or '0.00'}")
+    print(f"  分红(corps+):    {div_summary or '0.00'} ;  融资利息: {interest_summary or '0.00'}")
+    if fx_rates:
+        print(f"  税务汇总:        本账户应纳税额估算 RMB {tax_total_rmb:,.2f}")
     return 0
 
 
