@@ -48,8 +48,14 @@ If a CLI call fails because you're not logged in, the script points you to
 ## Usage
 
 ```bash
-python3 longbridge_tax.py --year 2025 -o out/ --rate 0.90322 --fx-rate USD=7.10
+python3 longbridge_tax.py --year 2025 -o out_<account>/ --rate 0.90322 --fx-rate USD=7.10
 ```
+
+`-o` is the per-account base directory; the year is auto-nested as a subfolder, so output
+lands in `out_<account>/<year>/` (e.g. `out_H10764613_M/2025/`). Use a distinct `-o` per
+account so different accounts and years never overwrite each other. The CLI uses whichever
+account its token is bound to (statements carry no account number), so name the `-o` folder
+after the account yourself and confirm the CLI is logged into that account.
 
 `--rate` is kept as the shorthand for the HKD→RMB year-end mid-rate (中间价). If your
 Longbridge statements include more than one currency, pass one `--fx-rate CCY=RATE` per

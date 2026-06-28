@@ -20,13 +20,20 @@ date-versioned (no semver tags).
   `负持仓` (negative-position) flags without changing realized totals.
 
 ### Changed
+- **Output is auto-nested per year: `-o` is now a per-account base dir and the year is added
+  as a subfolder** (`out_<account>/<year>/`, e.g. `out_H10764613_M/2025/`), so different
+  accounts and years never overwrite each other. If `-o` already ends in the year it is not
+  double-nested. The CLI has no account selector and statements carry no account number, so
+  name the `-o` folder after the account and ensure the CLI is logged into that account.
 - `LIPOALDR` added to `INTERNAL_BIZ` so the IPO allotment debit is consumed as cost basis
   rather than shown as a cash-out line in the cash-flow CSV.
 - `.gitignore` now ignores `out_*/` (per-account output folders) alongside `out/`.
 
 ### Added
-- Tests for IPO allotment parsing/seeding and same-day-ordering (`IpoAllotmentTest`).
-- SKILL.md gotcha #9 and statement-section notes documenting IPO allotment cost basis.
+- Tests for IPO allotment parsing/seeding and same-day-ordering (`IpoAllotmentTest`) and for
+  per-year output nesting / double-nest guard (`OutputNestingTest`).
+- SKILL.md gotcha #9 and statement-section notes documenting IPO allotment cost basis;
+  SKILL.md / README quick-start updated for the `out_<account>/<year>/` convention.
 
 ## 2026-06-26
 

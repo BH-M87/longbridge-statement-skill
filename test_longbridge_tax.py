@@ -85,7 +85,8 @@ class CurrencyHandlingTest(unittest.TestCase):
                 longbridge_tax.main(["--year", "2025", "-o", outdir, *extra])
 
     def _read(self, outdir, name):
-        with (Path(outdir) / name).open(encoding="utf-8-sig", newline="") as fp:
+        # the script auto-nests output under <outdir>/<year>/
+        with (Path(outdir) / "2025" / name).open(encoding="utf-8-sig", newline="") as fp:
             return list(csv.DictReader(fp))
 
     def test_negative_position_flag_includes_in_totals_and_warns(self):
@@ -143,7 +144,7 @@ class CurrencyHandlingTest(unittest.TestCase):
                         "USD=7.1",
                     ])
 
-            realized_path = Path(outdir) / "longbridge_2025_已实现盈亏_按标的.csv"
+            realized_path = Path(outdir) / "2025" / "longbridge_2025_已实现盈亏_按标的.csv"
             with realized_path.open(encoding="utf-8-sig", newline="") as fp:
                 realized_rows = list(csv.DictReader(fp))
             realized_by_currency = {
@@ -153,7 +154,7 @@ class CurrencyHandlingTest(unittest.TestCase):
             }
             self.assertEqual(realized_by_currency, {"HKD": 10.0, "USD": 3.0})
 
-            tax_path = Path(outdir) / "longbridge_2025_税务汇总.csv"
+            tax_path = Path(outdir) / "2025" / "longbridge_2025_税务汇总.csv"
             with tax_path.open(encoding="utf-8-sig", newline="") as fp:
                 tax_rows = list(csv.DictReader(fp))
             capital_rows = [r for r in tax_rows if r["所得项目"] == "财产转让所得·已实现(本账户股票/期权)"]
@@ -180,7 +181,7 @@ class CurrencyHandlingTest(unittest.TestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     longbridge_tax.main(["--year", "2025", "-o", outdir])
 
-            tax_path = Path(outdir) / "longbridge_2025_税务汇总.csv"
+            tax_path = Path(outdir) / "2025" / "longbridge_2025_税务汇总.csv"
             with tax_path.open(encoding="utf-8-sig", newline="") as fp:
                 tax_rows = list(csv.DictReader(fp))
             capital_rows = [r for r in tax_rows if r["所得项目"] == "财产转让所得·已实现(本账户股票/期权)"]
@@ -294,12 +295,12 @@ class IpoAllotmentTest(unittest.TestCase):
             ):
                 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                     longbridge_tax.main(["--year", "2025", "-o", outdir])
-            with (Path(outdir) / "longbridge_2025_已实现盈亏_按标的.csv").open(encoding="utf-8-sig", newline="") as fp:
+            with (Path(outdir) / "2025" / "longbridge_2025_已实现盈亏_按标的.csv").open(encoding="utf-8-sig", newline="") as fp:
                 rows = list(csv.DictReader(fp))
             detail = next(r for r in rows if r["代码"] == "2655")
             self.assertEqual(float(detail["已实现盈亏(原币)"]), 500.0)   # 1500 - 1000, not the full 1500
             self.assertNotIn("负持仓", detail["备注"])
-            with (Path(outdir) / "longbridge_2025_股息利息现金流.csv").open(encoding="utf-8-sig", newline="") as fp:
+            with (Path(outdir) / "2025" / "longbridge_2025_股息利息现金流.csv").open(encoding="utf-8-sig", newline="") as fp:
                 cash = list(csv.DictReader(fp))
             self.assertFalse([r for r in cash if "Allotted" in r["备注"]])   # cost basis, not cashflow
 
@@ -313,6 +314,32 @@ class IpoAllotmentTest(unittest.TestCase):
         self.assertFalse(b["shorted"])
         self.assertAlmostEqual(b["pos"], 0.0)
         self.assertEqual(round(b["realized"], 2), -200.0)
+
+
+class OutputNestingTest(unittest.TestCase):
+    _STMT = {"stock_trades": [], "corps": [], "interests": [], "asset": []}
+
+    def _run(self, outdir):
+        with (
+            patch.object(longbridge_tax, "ensure_cli"),
+            patch.object(longbridge_tax, "list_keys", return_value={"202501": "k1"}),
+            patch.object(longbridge_tax, "export", return_value=self._STMT),
+        ):
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                longbridge_tax.main(["--year", "2025", "-o", outdir])
+
+    def test_year_is_auto_nested_under_outdir(self):
+        with tempfile.TemporaryDirectory() as base:
+            acct = str(Path(base) / "out_H10764613_M")
+            self._run(acct)
+            self.assertTrue((Path(acct) / "2025" / "longbridge_2025_税务汇总.csv").exists())
+
+    def test_outdir_already_ending_in_year_is_not_double_nested(self):
+        with tempfile.TemporaryDirectory() as base:
+            acct_year = str(Path(base) / "out_H10764613_M" / "2025")
+            self._run(acct_year)
+            self.assertTrue((Path(acct_year) / "longbridge_2025_税务汇总.csv").exists())
+            self.assertFalse((Path(acct_year) / "2025").exists())   # no .../2025/2025
 
 
 if __name__ == "__main__":

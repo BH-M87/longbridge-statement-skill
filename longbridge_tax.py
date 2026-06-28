@@ -284,7 +284,9 @@ def realized_by_ticker(trades, opening):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Longbridge statements -> tax CSVs (via official CLI)")
     ap.add_argument("--year", type=int, required=True, help="tax year, e.g. 2025")
-    ap.add_argument("-o", "--outdir", default="longbridge_parsed", help="output directory")
+    ap.add_argument("-o", "--outdir", default="longbridge_parsed",
+                    help="per-account base output directory; the year is auto-nested as a "
+                         "subfolder, e.g. -o out_H10764613_M -> out_H10764613_M/<year>/")
     ap.add_argument("--rate", type=float, default=None,
                     help="HKD->RMB rate shorthand, same as --fx-rate HKD=RATE")
     ap.add_argument("--fx-rate", action="append", default=[], metavar="CCY=RATE",
@@ -302,7 +304,13 @@ def main(argv=None):
     except argparse.ArgumentTypeError as exc:
         ap.error(str(exc))
     year = args.year
-    os.makedirs(args.outdir, exist_ok=True)
+    # Nest each year in its own subfolder (-o is the per-account base dir), so different
+    # accounts/years never overwrite each other: out_<account>/<year>/. Skip if the path
+    # already ends in the year (e.g. -o out_<account>/2025) to avoid .../2025/2025.
+    outdir = args.outdir
+    if os.path.basename(os.path.normpath(outdir)) != str(year):
+        outdir = os.path.join(outdir, str(year))
+    os.makedirs(outdir, exist_ok=True)
 
     ensure_cli()                                     # offer to install/login if missing (asks first)
     keys = list_keys(year)
@@ -379,7 +387,7 @@ def main(argv=None):
             navrows.append([ym, as_.get("currency", ""), num(as_.get("total"))])
 
     def w(name, header, rows):
-        with open(os.path.join(args.outdir, name), "w", newline="", encoding="utf-8-sig") as fp:
+        with open(os.path.join(outdir, name), "w", newline="", encoding="utf-8-sig") as fp:
             wr = csv.writer(fp); wr.writerow(header); [wr.writerow(r) for r in rows]
 
     def rmb(v, currency): return amount_to_rmb(v, currency, fx_rates)
@@ -478,7 +486,7 @@ def main(argv=None):
         trows.append(["提示", "", "传 --rate <HKD年末中间价> 或 --fx-rate <币种=年末中间价> 可计算人民币与应纳税额"])
     w(f"longbridge_{year}_税务汇总.csv", th, trows)
 
-    print(f"Longbridge {year} -> {args.outdir}/")
+    print(f"Longbridge {year} -> {outdir}/")
     trade_summary = ", ".join(f"{ccy or 'UNKNOWN'} {total:,.2f}"
                               for ccy, total in sorted(sums_by_currency(trades, 11, 6).items()))
     print(f"  成交明细:        {len(trades)} 笔 (股票/期权/基金), Σ清算净额={trade_summary}")

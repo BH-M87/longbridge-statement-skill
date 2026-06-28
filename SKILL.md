@@ -53,8 +53,14 @@ not the Longbridge MCP.)
 ## Quick Start
 
 ```bash
-python3 longbridge_tax.py --year 2025 -o out/ --rate 0.90322 --fx-rate USD=7.10
+python3 longbridge_tax.py --year 2025 -o out_<account>/ --rate 0.90322 --fx-rate USD=7.10
 ```
+
+`-o` is the **per-account base directory**; the script auto-nests each year as a subfolder,
+so output lands in `out_<account>/<year>/` (e.g. `out_H10764613_M/2025/`). Use a distinct
+`-o` per account and different years never collide. The CLI has no account selector — it uses
+whichever account the token is bound to, and statements carry no account number, so **name the
+`-o` folder after the account yourself** and make sure the CLI is logged into that account.
 
 `--rate` (optional) is the HKD→RMB year-end 中间价 shorthand. For multi-currency statements,
 pass one `--fx-rate CCY=RATE` per currency, e.g. `--fx-rate HKD=0.90322 --fx-rate USD=7.10`.
