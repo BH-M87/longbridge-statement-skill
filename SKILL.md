@@ -111,10 +111,13 @@ a `flag` run that still has unresolved negative positions without telling the us
    for the 12 months **plus the prior December** (for opening cost basis).
 2. `longbridge statement export --file-key <k>` → each month's full JSON.
 3. Reconstruct realized P&L (average-cost, long + short) from `stock_trades`, seeded from the
-   prior-Dec `equity_holdings`. Realized accrues only when a trade reduces the open position, so
-   positions still open at year-end (long or short) contribute 0. A negative position is flagged
-   (a cash account can't really short — usually missing cost basis) instead of booking the whole
-   sale as profit. Dividends from `corps`; interest from `interests`.
+   prior-Dec `equity_holdings` **and from IPO allotments** (`account_balance_changes` lines with
+   `biz_code LIPOALDR` — 打新中签 shares arrive here with their cost, not as a `stock_trades` buy).
+   Within a trade date, buys are processed before sells (statements carry no intraday time), so a
+   same-day round-trip isn't mistaken for a short. Realized accrues only when a trade reduces the
+   open position, so positions still open at year-end (long or short) contribute 0. A genuinely
+   negative position is flagged (a cash account can't really short — usually missing cost basis)
+   instead of booking the whole sale as profit. Dividends from `corps`; interest from `interests`.
 
 ## Statement sections used
 
@@ -124,7 +127,7 @@ a `flag` run that still has unresolved negative positions without telling the us
 | `equity_holdings` | per-holding `cost_price`, quantities (incl. prior-Dec) | opening cost basis |
 | `corps` | corporate actions / cash dividends | dividend income |
 | `interests` | monthly financing interest (`total` negative = paid) | interest cost |
-| `account_balance_changes` | cash movements (withdrawals, etc.) | cash-flow view |
+| `account_balance_changes` | cash movements (withdrawals, etc.) + IPO allotment debits (`biz_code LIPOALDR`) | cash-flow view; **IPO 打新 cost basis** |
 | `asset` | month-end asset total | NAV cross-check |
 | `fund_trades` | money-market fund subscribe/redeem | shown; excluded from realized |
 
@@ -149,6 +152,10 @@ a `flag` run that still has unresolved negative positions without telling the us
    for every currency that needs tax/RMB output.
 8. **Default FX rates are year-scoped.** 2025 has built-in PBOC/CFETS 2025-12-31 defaults
    for HKD and USD. Other years need explicit rates until their defaults are added.
+9. **IPO-allotted shares (打新中签) have no buy in `stock_trades`.** Their cost basis is the
+   `IPO Allotted Amount(Dr)` line in `account_balance_changes` (`biz_code LIPOALDR`); the script
+   seeds it automatically. Without it, selling allotted shares would look like a zero-cost short
+   and massively overstate the gain (it once flipped a real +HKD 10k profit into a fake loss).
 
 ## Tax note (个税 境外所得)
 

@@ -28,12 +28,19 @@ Outputs (CSV, utf-8-sig; no personal data is embedded — everything comes from 
     longbridge_<YEAR>_税务汇总.csv           tax summary: gains/dividends/interest + tax due (--rate/--fx-rate)
 """
 from __future__ import annotations
-import argparse, csv, json, os, shutil, subprocess, sys
+import argparse, csv, json, os, re, shutil, subprocess, sys
 from collections import defaultdict
 
-# account_balance_changes biz_codes that are internal/round-trip, excluded from cashflow view
-INTERNAL_BIZ = {"LMMFP", "LMMFR", "LIPOREFD", "LIPODR", "LINTDR"}
+# account_balance_changes biz_codes that are internal/round-trip, excluded from cashflow view.
+# LIPOALDR (IPO allotment debit) is the all-in cost of 打新中签 shares — seeded as cost basis
+# (see ipo_allotment), so it is hidden from the cashflow view rather than shown as cash out.
+INTERNAL_BIZ = {"LMMFP", "LMMFR", "LIPOREFD", "LIPODR", "LIPOALDR", "LINTDR"}
 DIV_HINTS = ("股息", "分红", "dividend", "div", "i/d", "f/d")   # to spot dividends anywhere
+
+# market suffix -> settlement currency, for statement lines that omit `currency`
+MARKET_CCY = {"HK": "HKD", "US": "USD", "SG": "SGD", "SH": "CNY", "SZ": "CNY"}
+# e.g. "IPO  6831.HK Allotted Amount (400 Shares @HKD 2,876.00)" -> code/market/qty
+_IPO_ALLOT_RE = re.compile(r"([0-9A-Za-z]+)\.([A-Za-z]{2}).*?\(([\d,]+)\s*Shares", re.I)
 
 # PBOC/CFETS RMB central parity rates on the tax year's final calendar day.
 # Source for 2025: https://www.pbc.gov.cn/zhengcehuobisi/125207/125217/125925/2025123109021714424/index.html
@@ -54,6 +61,30 @@ def num(s):
         return float(str(s).replace(",", ""))
     except (TypeError, ValueError):
         return 0.0
+
+
+def ipo_allotment(change):
+    """An 'IPO Allotted Amount(Dr)' balance change -> (currency, code, qty, total_cost) or None.
+
+    IPO-allotted (打新中签) shares arrive via account_balance_changes (biz_code LIPOALDR),
+    NOT stock_trades, and carry no buy record. Without seeding their cost here, a later sale
+    of them reconstructs as a zero-cost short and overstates the gain. `amount` is the all-in
+    debited cost (subscription + fee); code / quantity / currency come from the remark, e.g.
+    "IPO  6831.HK Allotted Amount (400 Shares @HKD 2,876.00)".
+    """
+    if str(change.get("biz_code", "")) != "LIPOALDR":
+        return None
+    remark = str(change.get("remark", ""))
+    m = _IPO_ALLOT_RE.search(remark)
+    if not m:
+        return None
+    code, market, qty = m.group(1), m.group(2).upper(), num(m.group(3))
+    if qty <= 0:
+        return None
+    cm = re.search(r"@\s*([A-Za-z]{3})", remark)
+    currency = ((change.get("currency") or "") or (cm.group(1) if cm else "")
+                or MARKET_CCY.get(market, "")).upper()
+    return currency, code, qty, abs(num(change.get("amount")))
 
 
 def parse_fx_rates(year, rate, fx_rate_args):
@@ -215,7 +246,9 @@ def realized_by_ticker(trades, opening):
         key = ((currency or "").upper(), str(code))
         book[key] = {"name": name, "currency": key[0], "pos": qty, "avg": cp,
                      "realized": 0.0, "nf": 0, "sumnet": 0.0, "shorted": False}
-    for t in sorted(trades, key=lambda r: r[0]):        # by trade_date
+    # by trade_date; within a day, opens (买入) before disposals (卖出) so same-day round-trips
+    # don't reconstruct as phantom shorts (statements carry no intraday execution time)
+    for t in sorted(trades, key=lambda r: (r[0], 0 if r[4] == "买入" else 1)):
         if t[5] not in ("stock", "option"):             # funds handled separately
             continue
         currency, code, name, net, q = (t[6] or "").upper(), t[2], t[3], t[11], t[7]
@@ -329,6 +362,19 @@ def main(argv=None):
                 continue
             cashflows.append([d(a.get("date")), ("分红" if is_div else typ) or bc,
                               a.get("currency", ""), num(a.get("amount")), remark])
+        # IPO-allotted shares -> seed opening cost basis (they have no buy in stock_trades)
+        for a in st.get("account_balance_changes", []):
+            al = ipo_allotment(a)
+            if not al:
+                continue
+            currency, code, qty, cost = al
+            key = (currency, code)
+            if key in opening:
+                q0, cp0, nm0 = opening[key]
+                nq = q0 + qty
+                opening[key] = (nq, (q0 * cp0 + cost) / nq, nm0)
+            else:
+                opening[key] = (qty, cost / qty, "")
         for as_ in st.get("asset", []):
             navrows.append([ym, as_.get("currency", ""), num(as_.get("total"))])
 

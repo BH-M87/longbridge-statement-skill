@@ -5,6 +5,7 @@
 *.xlsx
 *.xls
 out/
+out_*/
 longbridge_parsed/
 *_parsed/
 

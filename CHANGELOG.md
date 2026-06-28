@@ -1,0 +1,48 @@
+# Changelog
+
+All notable changes to the Longbridge statement tax skill are documented here.
+Format loosely follows [Keep a Changelog](https://keepachangelog.com/); the project is
+date-versioned (no semver tags).
+
+## 2026-06-28
+
+### Fixed
+- **IPO-allotted shares (打新中签) are now costed correctly.** Allotted shares enter via
+  `account_balance_changes` (`biz_code LIPOALDR`, e.g.
+  `IPO 6831.HK Allotted Amount (400 Shares @HKD 2,876.00)`), not as a `stock_trades` buy, so
+  the reconstruction previously treated a later sale as a zero-cost short and badly overstated
+  the gain. New `ipo_allotment()` parses these lines and seeds their cost basis like a
+  carried-in holding. (On a real 2025 account this flipped a spurious −9,976.90 HKD *loss*
+  into the true +10,292.15 HKD *profit* — 7 IPO names worth +14,787.86 HKD.)
+- **Same-day round-trips no longer reconstruct as phantom shorts.** Statements carry no
+  intraday execution time and sometimes list the SELL line before the BUY on the same date.
+  Reconstruction now orders buys before sells within a trade date, clearing spurious
+  `负持仓` (negative-position) flags without changing realized totals.
+
+### Changed
+- `LIPOALDR` added to `INTERNAL_BIZ` so the IPO allotment debit is consumed as cost basis
+  rather than shown as a cash-out line in the cash-flow CSV.
+- `.gitignore` now ignores `out_*/` (per-account output folders) alongside `out/`.
+
+### Added
+- Tests for IPO allotment parsing/seeding and same-day-ordering (`IpoAllotmentTest`).
+- SKILL.md gotcha #9 and statement-section notes documenting IPO allotment cost basis.
+
+## 2026-06-26
+
+### Added
+- `--on-negative-position {flag,exclude,short}` flag with skill-guided confirmation for
+  instruments whose reconstructed position goes negative.
+
+## 2026-06-25
+
+### Fixed
+- Correct realized P&L for short / oversold positions (no longer books the whole sale as profit).
+- Multi-currency tax reporting: amounts bucketed per currency with per-currency FX rates.
+
+## 2026-06-21
+
+### Added
+- Initial Longbridge statement tax skill: pulls monthly statements via the official
+  `longbridge` CLI and reconstructs realized P&L, dividends, interest, and a tax summary.
+- Auto-install / auth guidance for the CLI when missing (with y/N confirmation).

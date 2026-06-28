@@ -254,5 +254,66 @@ class CurrencyHandlingTest(unittest.TestCase):
         return statement
 
 
+class IpoAllotmentTest(unittest.TestCase):
+    def test_parses_allotment_remark(self):
+        change = {"biz_code": "LIPOALDR", "amount": "-2905.00", "currency": "",
+                  "remark": "IPO  6831.HK Allotted Amount (400 Shares @HKD 2,876.00)",
+                  "type": "IPO Allotted Amount(Dr)"}
+        self.assertEqual(longbridge_tax.ipo_allotment(change), ("HKD", "6831", 400.0, 2905.0))
+
+    def test_subscription_debit_is_not_an_allotment(self):
+        # LIPODR (subscription) is refunded later; only LIPOALDR (allotment) is a cost-basis event
+        change = {"biz_code": "LIPODR", "amount": "-2905.00", "currency": "",
+                  "remark": "IPO 6831.HK @2,905.00 (400 Shares) Financing: 0.00",
+                  "type": "IPO Subscription Amount(Dr)"}
+        self.assertIsNone(longbridge_tax.ipo_allotment(change))
+
+    def _ipo_statement(self):
+        # allotted 100 IPO shares costing 1000 (10/sh), later sold 100 @15/sh -> realized 500
+        return {
+            "stock_trades": [
+                {"trade_date": "2025.06.10", "settle_date": "2025.06.12", "code": "2655",
+                 "name": "GUOXIA TECH", "direction": "SELL", "currency": "HKD",
+                 "trade_quantity": "100", "trade_price": "15", "trade_amount": "1500",
+                 "clear_amount": "1500"},
+            ],
+            "account_balance_changes": [
+                {"biz_code": "LIPOALDR", "amount": "-1000.00", "currency": "", "date": "2025.05.20",
+                 "remark": "IPO  2655.HK Allotted Amount (100 Shares @HKD 1,000.00)",
+                 "type": "IPO Allotted Amount(Dr)"},
+            ],
+            "corps": [], "interests": [], "asset": [],
+        }
+
+    def test_ipo_allotment_seeds_cost_basis_not_zero_cost_short(self):
+        with tempfile.TemporaryDirectory() as outdir:
+            with (
+                patch.object(longbridge_tax, "ensure_cli"),
+                patch.object(longbridge_tax, "list_keys", return_value={"202506": "k1"}),
+                patch.object(longbridge_tax, "export", return_value=self._ipo_statement()),
+            ):
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    longbridge_tax.main(["--year", "2025", "-o", outdir])
+            with (Path(outdir) / "longbridge_2025_已实现盈亏_按标的.csv").open(encoding="utf-8-sig", newline="") as fp:
+                rows = list(csv.DictReader(fp))
+            detail = next(r for r in rows if r["代码"] == "2655")
+            self.assertEqual(float(detail["已实现盈亏(原币)"]), 500.0)   # 1500 - 1000, not the full 1500
+            self.assertNotIn("负持仓", detail["备注"])
+            with (Path(outdir) / "longbridge_2025_股息利息现金流.csv").open(encoding="utf-8-sig", newline="") as fp:
+                cash = list(csv.DictReader(fp))
+            self.assertFalse([r for r in cash if "Allotted" in r["备注"]])   # cost basis, not cashflow
+
+    def test_same_day_round_trip_not_flagged_as_short(self):
+        # statement lists the SELL before the BUY on the same date; must not reconstruct a phantom short
+        trades = [
+            trade_row("2025/06/04", "9992", "POP MART", "HKD", 200, 47960.0),    # sell line first
+            trade_row("2025/06/04", "9992", "POP MART", "HKD", 200, -48160.0),   # buy, same day
+        ]
+        b = longbridge_tax.realized_by_ticker(trades, {})[("HKD", "9992")]
+        self.assertFalse(b["shorted"])
+        self.assertAlmostEqual(b["pos"], 0.0)
+        self.assertEqual(round(b["realized"], 2), -200.0)
+
+
 if __name__ == "__main__":
     unittest.main()
