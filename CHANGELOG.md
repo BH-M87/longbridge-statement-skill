@@ -4,6 +4,21 @@ All notable changes to the Longbridge statement tax skill are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); the project is
 date-versioned (no semver tags).
 
+## 2026-06-29
+
+### Changed
+- **Default output is now `out/<year>/`; output is no longer labelled by account.** The
+  Longbridge account number is not retrievable from the API or the statements — it is known
+  only at CLI login (`assets`/`portfolio` don't carry it; `bank-cards` lists external bank
+  accounts, not the brokerage account). The previous "name `-o` after the account" guidance
+  invited *guessing* the account (e.g. from memory), which silently mislabels tax data. The
+  default `-o` changed from `longbridge_parsed` to `out`, and SKILL.md/README now say never to
+  guess the account; pass a distinct `-o` per account only if you actually run multiple
+  accounts. Year auto-nesting and the double-nest guard are unchanged.
+
+### Added
+- `OutputNestingTest.test_default_outdir_is_plain_out` pins the `out/<year>/` default.
+
 ## 2026-06-28
 
 ### Fixed

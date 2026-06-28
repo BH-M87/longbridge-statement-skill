@@ -14,7 +14,7 @@ costed correctly. Cash dividends live in `corps` (corporate actions); financing 
 in `interests` (it is a cost you paid, not income).
 
 Usage:
-    python3 longbridge_tax.py --year 2025 -o OUTDIR [--rate 0.90322] [--fx-rate USD=7.1]
+    python3 longbridge_tax.py --year 2025 [-o OUTDIR] [--rate 0.90322] [--fx-rate USD=7.1]
 
 Prerequisite: the official Longbridge CLI installed and authenticated, so that
 `longbridge statement --type monthly --format json` works in your shell. This script
@@ -284,9 +284,12 @@ def realized_by_ticker(trades, opening):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Longbridge statements -> tax CSVs (via official CLI)")
     ap.add_argument("--year", type=int, required=True, help="tax year, e.g. 2025")
-    ap.add_argument("-o", "--outdir", default="longbridge_parsed",
-                    help="per-account base output directory; the year is auto-nested as a "
-                         "subfolder, e.g. -o out_H10764613_M -> out_H10764613_M/<year>/")
+    ap.add_argument("-o", "--outdir", default="out",
+                    help="base output directory (default: out); the year is auto-nested as a "
+                         "subfolder, e.g. default -> out/<year>/. The Longbridge account number "
+                         "is NOT retrievable from the API/statements (only known at CLI login), so "
+                         "do not try to name this after the account. If you juggle multiple accounts, "
+                         "pass a distinct -o per account yourself, e.g. -o out_acctA -> out_acctA/<year>/")
     ap.add_argument("--rate", type=float, default=None,
                     help="HKD->RMB rate shorthand, same as --fx-rate HKD=RATE")
     ap.add_argument("--fx-rate", action="append", default=[], metavar="CCY=RATE",
@@ -304,9 +307,9 @@ def main(argv=None):
     except argparse.ArgumentTypeError as exc:
         ap.error(str(exc))
     year = args.year
-    # Nest each year in its own subfolder (-o is the per-account base dir), so different
-    # accounts/years never overwrite each other: out_<account>/<year>/. Skip if the path
-    # already ends in the year (e.g. -o out_<account>/2025) to avoid .../2025/2025.
+    # Nest each year in its own subfolder so different years never overwrite each other:
+    # out/<year>/ by default (or <-o>/<year>/). Skip if the path already ends in the year
+    # (e.g. -o out/2025) to avoid .../2025/2025.
     outdir = args.outdir
     if os.path.basename(os.path.normpath(outdir)) != str(year):
         outdir = os.path.join(outdir, str(year))

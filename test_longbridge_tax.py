@@ -1,6 +1,7 @@
 import csv
 import contextlib
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -330,16 +331,34 @@ class OutputNestingTest(unittest.TestCase):
 
     def test_year_is_auto_nested_under_outdir(self):
         with tempfile.TemporaryDirectory() as base:
-            acct = str(Path(base) / "out_H10764613_M")
+            acct = str(Path(base) / "out_acctA")
             self._run(acct)
             self.assertTrue((Path(acct) / "2025" / "longbridge_2025_税务汇总.csv").exists())
 
     def test_outdir_already_ending_in_year_is_not_double_nested(self):
         with tempfile.TemporaryDirectory() as base:
-            acct_year = str(Path(base) / "out_H10764613_M" / "2025")
+            acct_year = str(Path(base) / "out_acctA" / "2025")
             self._run(acct_year)
             self.assertTrue((Path(acct_year) / "longbridge_2025_税务汇总.csv").exists())
             self.assertFalse((Path(acct_year) / "2025").exists())   # no .../2025/2025
+
+    def test_default_outdir_is_plain_out(self):
+        # No -o given: the account number is unknowable from the API, so the default
+        # must be a plain `out/<year>/` — never a guessed per-account folder.
+        with tempfile.TemporaryDirectory() as base:
+            cwd = os.getcwd()
+            os.chdir(base)
+            try:
+                with (
+                    patch.object(longbridge_tax, "ensure_cli"),
+                    patch.object(longbridge_tax, "list_keys", return_value={"202501": "k1"}),
+                    patch.object(longbridge_tax, "export", return_value=self._STMT),
+                ):
+                    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                        longbridge_tax.main(["--year", "2025"])
+                self.assertTrue((Path(base) / "out" / "2025" / "longbridge_2025_税务汇总.csv").exists())
+            finally:
+                os.chdir(cwd)
 
 
 if __name__ == "__main__":

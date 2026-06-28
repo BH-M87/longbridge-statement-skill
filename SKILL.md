@@ -53,14 +53,19 @@ not the Longbridge MCP.)
 ## Quick Start
 
 ```bash
-python3 longbridge_tax.py --year 2025 -o out_<account>/ --rate 0.90322 --fx-rate USD=7.10
+python3 longbridge_tax.py --year 2025
 ```
 
-`-o` is the **per-account base directory**; the script auto-nests each year as a subfolder,
-so output lands in `out_<account>/<year>/` (e.g. `out_H10764613_M/2025/`). Use a distinct
-`-o` per account and different years never collide. The CLI has no account selector — it uses
-whichever account the token is bound to, and statements carry no account number, so **name the
-`-o` folder after the account yourself** and make sure the CLI is logged into that account.
+Output lands in `out/<year>/` by default (e.g. `out/2025/`); `-o DIR` overrides the base and
+the year is always auto-nested under it. **The Longbridge account number is *not* retrievable
+from the API or the statements — it is known only at CLI login time** (the `assets`/`portfolio`
+commands don't carry it, and `bank-cards` shows your external bank accounts, not the brokerage
+account). So the script does not label output by account, and **you must never guess one** — a
+wrong guess (e.g. from memory) silently mislabels someone's tax data. The CLI has no account
+selector either: it uses whichever account the token is bound to, so just make sure the CLI is
+logged into the account you mean. Only if you genuinely run **multiple** accounts do you need
+to separate them — then pass a distinct `-o` per account yourself (e.g. `-o out_acctA`) and
+switch CLI logins between runs.
 
 `--rate` (optional) is the HKD→RMB year-end 中间价 shorthand. For multi-currency statements,
 pass one `--fx-rate CCY=RATE` per currency, e.g. `--fx-rate HKD=0.90322 --fx-rate USD=7.10`.
