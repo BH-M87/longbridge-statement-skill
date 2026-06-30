@@ -393,7 +393,8 @@ def main(argv=None):
                               num(c.get("amount") or c.get("net_amount")),
                               c.get("remark") or c.get("name") or json.dumps(c, ensure_ascii=False)])
         for it in st.get("interests", []):
-            cashflows.append([d(it.get("date") or ym), "融资利息", it.get("currency", ""),
+            cashflows.append([d(it.get("date") or ym), "融资利息",
+                              settle_ccy(it, "symbol", "code", "remark", "name"),
                               num(it.get("total")), f"利率 {it.get('rate', '')}"])
         for a in st.get("account_balance_changes", []):
             bc = str(a.get("biz_code", ""))
