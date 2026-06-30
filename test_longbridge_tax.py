@@ -363,6 +363,37 @@ class DividendCurrencyTest(unittest.TestCase):
         self.assertNotIn("", {r["货币"] for r in div_rows})   # no dividend left in the unknown bucket
 
 
+class InterestCurrencyTest(unittest.TestCase):
+    def test_blank_currency_interest_buckets_under_market_currency(self):
+        # financing interest can also arrive with currency='' (the market in the symbol/remark);
+        # it must bucket under that currency, not vanish into an unknown-currency row.
+        statement = {
+            "stock_trades": [], "corps": [], "asset": [],
+            "interests": [
+                {"date": "2025.05.01", "currency": "", "symbol": "700.HK", "total": "-3.5", "rate": "0.05"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as outdir:
+            with (
+                patch.object(longbridge_tax, "ensure_cli"),
+                patch.object(longbridge_tax, "list_keys", return_value={"202505": "k1"}),
+                patch.object(longbridge_tax, "export", return_value=statement),
+            ):
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    longbridge_tax.main(["--year", "2025", "-o", outdir, "--fx-rate", "HKD=0.9"])
+            cash_path = Path(outdir) / "2025" / "longbridge_2025_股息利息现金流.csv"
+            with cash_path.open(encoding="utf-8-sig", newline="") as fp:
+                cash_rows = list(csv.DictReader(fp))
+            tax_path = Path(outdir) / "2025" / "longbridge_2025_税务汇总.csv"
+            with tax_path.open(encoding="utf-8-sig", newline="") as fp:
+                tax_rows = list(csv.DictReader(fp))
+        interest_cash = [r for r in cash_rows if r["类型"] == "融资利息"]
+        self.assertEqual({r["货币"] for r in interest_cash}, {"HKD"})
+        interest_tax = [r for r in tax_rows
+                        if r["所得项目"] == "(备查)融资利息支出" and float(r["金额(原币)"]) != 0]
+        self.assertEqual({r["货币"] for r in interest_tax}, {"HKD"})
+
+
 class OutputNestingTest(unittest.TestCase):
     _STMT = {"stock_trades": [], "corps": [], "interests": [], "asset": []}
 

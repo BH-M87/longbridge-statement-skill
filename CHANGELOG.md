@@ -16,11 +16,18 @@ date-versioned (no semver tags).
   `settle_ccy()` helper derives the settlement currency from an `@HKD`-style tag or a
   `CODE.MARKET` suffix (mapped through `MARKET_CCY`) whenever the field is blank, and is now
   applied to both dividend sources (`corps` and dividend-flagged `account_balance_changes`).
+- **Financing interest with a blank `currency` now buckets under the right currency too.**
+  The same `settle_ccy()` fallback is applied to `interests` lines, so a blank-currency
+  interest line that carries the market in its symbol/remark no longer lands in the
+  unknown-currency row of the 税务汇总 (interest is a备查 cost, not taxed, but it must still
+  reconcile per currency).
 
 ### Added
 - `DividendCurrencyTest` covering `settle_ccy` precedence (explicit → `@CCY` tag → market
   suffix) and an end-to-end check that blank-currency dividends are taxed under the right
   currency instead of vanishing into the unknown bucket.
+- `InterestCurrencyTest` checking a blank-currency financing-interest line buckets under its
+  market currency in both the cashflow CSV and the tax summary.
 
 ## 2026-06-29
 
