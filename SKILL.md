@@ -160,7 +160,11 @@ a `flag` run that still has unresolved negative positions without telling the us
    within `财产转让所得` before computing the final capital-gains tax.
 7. **Currencies are not interchangeable.** Keep USD/HKD/etc. in separate buckets for
    average cost, realized P&L, dividends, interest, and RMB conversion. Use `--fx-rate`
-   for every currency that needs tax/RMB output.
+   for every currency that needs tax/RMB output. Note that cash-dividend lines (in `corps`
+   or as dividend-flagged `account_balance_changes`) often arrive with a **blank `currency`
+   field**, carrying the market only in the remark/symbol (e.g. `Cash Dividend 700.HK`); the
+   script recovers it via `settle_ccy()` (`@CCY` tag or `CODE.MARKET` suffix) so the dividend
+   is still taxed under HKD/USD rather than dropping into an unknown-currency bucket.
 8. **Default FX rates are year-scoped.** 2025 has built-in PBOC/CFETS 2025-12-31 defaults
    for HKD and USD. Other years need explicit rates until their defaults are added.
 9. **IPO-allotted shares (打新中签) have no buy in `stock_trades`.** Their cost basis is the

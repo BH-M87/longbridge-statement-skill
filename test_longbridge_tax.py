@@ -317,6 +317,52 @@ class IpoAllotmentTest(unittest.TestCase):
         self.assertEqual(round(b["realized"], 2), -200.0)
 
 
+class DividendCurrencyTest(unittest.TestCase):
+    def test_settle_ccy_prefers_explicit_then_at_tag_then_market_suffix(self):
+        self.assertEqual(longbridge_tax.settle_ccy({"currency": "usd"}, "remark"), "USD")
+        self.assertEqual(longbridge_tax.settle_ccy({"currency": "", "remark": "@HKD 1.20/sh"}, "remark"), "HKD")
+        self.assertEqual(longbridge_tax.settle_ccy({"currency": "", "symbol": "700.HK"}, "symbol"), "HKD")
+        self.assertEqual(longbridge_tax.settle_ccy({"currency": "", "remark": "AAPL.US dividend"}, "remark"), "USD")
+        # a bare amount line with no currency clue stays unknown (not silently mislabelled)
+        self.assertEqual(longbridge_tax.settle_ccy({"currency": "", "remark": "cash dividend"}, "remark"), "")
+        # a date-like dotted token must not be mistaken for a market suffix
+        self.assertEqual(longbridge_tax.settle_ccy({"currency": "", "remark": "paid 2025.03"}, "remark"), "")
+
+    def test_blank_currency_dividend_is_taxed_under_market_currency(self):
+        # real Longbridge cash dividends often arrive with currency='' (see IpoAllotmentTest),
+        # carrying the market only in the remark/symbol. They must still convert to RMB and be
+        # taxed under that currency, not vanish into an unknown-currency bucket.
+        statement = {
+            "stock_trades": [], "interests": [], "asset": [],
+            "corps": [
+                {"date": "2025.04.01", "symbol": "AAPL.US", "amount": "12.5", "remark": "Cash Dividend"},
+            ],
+            "account_balance_changes": [
+                {"biz_code": "DIVIDEND", "amount": "500", "currency": "", "date": "2025.03.15",
+                 "remark": "Cash Dividend 700.HK", "type": "Dividend"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as outdir:
+            with (
+                patch.object(longbridge_tax, "ensure_cli"),
+                patch.object(longbridge_tax, "list_keys", return_value={"202503": "k1"}),
+                patch.object(longbridge_tax, "export", return_value=statement),
+            ):
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    longbridge_tax.main(["--year", "2025", "-o", outdir,
+                                         "--fx-rate", "HKD=0.9", "--fx-rate", "USD=7.0"])
+            tax_path = Path(outdir) / "2025" / "longbridge_2025_税务汇总.csv"
+            with tax_path.open(encoding="utf-8-sig", newline="") as fp:
+                tax_rows = list(csv.DictReader(fp))
+        div_rows = [r for r in tax_rows
+                    if r["所得项目"] == "利息股息红利所得·现金分红(毛额)" and float(r["金额(原币)"]) > 0]
+        self.assertEqual(
+            {(r["货币"], float(r["金额(原币)"]), float(r["金额(RMB)"]), float(r["应纳税额(RMB)"])) for r in div_rows},
+            {("HKD", 500.0, 450.0, 90.0), ("USD", 12.5, 87.5, 17.5)},
+        )
+        self.assertNotIn("", {r["货币"] for r in div_rows})   # no dividend left in the unknown bucket
+
+
 class OutputNestingTest(unittest.TestCase):
     _STMT = {"stock_trades": [], "corps": [], "interests": [], "asset": []}
 

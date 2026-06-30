@@ -41,6 +41,11 @@ DIV_HINTS = ("股息", "分红", "dividend", "div", "i/d", "f/d")   # to spot di
 MARKET_CCY = {"HK": "HKD", "US": "USD", "SG": "SGD", "SH": "CNY", "SZ": "CNY"}
 # e.g. "IPO  6831.HK Allotted Amount (400 Shares @HKD 2,876.00)" -> code/market/qty
 _IPO_ALLOT_RE = re.compile(r"([0-9A-Za-z]+)\.([A-Za-z]{2}).*?\(([\d,]+)\s*Shares", re.I)
+# currency tags inside a free-text remark, used when a cashflow line's `currency` field is
+# blank (real Longbridge statements often leave it empty — see ipo_allotment): an explicit
+# "@HKD" tag, else a "CODE.MARKET" suffix (e.g. 700.HK -> HKD) mapped through MARKET_CCY.
+_CCY_AT_RE = re.compile(r"@\s*([A-Za-z]{3})")
+_MKT_SUFFIX_RE = re.compile(r"\b[0-9A-Za-z]+\.([A-Za-z]{2})\b")
 
 # PBOC/CFETS RMB central parity rates on the tax year's final calendar day.
 # Source for 2025: https://www.pbc.gov.cn/zhengcehuobisi/125207/125217/125925/2025123109021714424/index.html
@@ -81,10 +86,34 @@ def ipo_allotment(change):
     code, market, qty = m.group(1), m.group(2).upper(), num(m.group(3))
     if qty <= 0:
         return None
-    cm = re.search(r"@\s*([A-Za-z]{3})", remark)
+    cm = _CCY_AT_RE.search(remark)
     currency = ((change.get("currency") or "") or (cm.group(1) if cm else "")
                 or MARKET_CCY.get(market, "")).upper()
     return currency, code, qty, abs(num(change.get("amount")))
+
+
+def settle_ccy(record, *text_fields):
+    """Settlement currency for a cashflow record (dividend, interest, balance change).
+
+    Prefer the explicit `currency` field; when it is blank — which real Longbridge
+    statements often leave it (the dividend/IPO lines carry currency only inside the
+    remark, e.g. "Cash Dividend 700.HK" or "@HKD") — fall back to a currency tag found in
+    the given free-text fields. Without this, a blank-currency dividend buckets under an
+    unknown currency and silently escapes RMB conversion and the dividend tax. '' if unknown.
+    """
+    explicit = (record.get("currency") or "").strip().upper()
+    if explicit:
+        return explicit
+    texts = [str(record.get(f) or "") for f in text_fields]
+    for t in texts:                                  # explicit "@HKD"-style tag wins
+        m = _CCY_AT_RE.search(t)
+        if m:
+            return m.group(1).upper()
+    for t in texts:                                  # else a CODE.MARKET suffix (700.HK -> HKD)
+        m = _MKT_SUFFIX_RE.search(t)
+        if m and m.group(1).upper() in MARKET_CCY:
+            return MARKET_CCY[m.group(1).upper()]
+    return ""
 
 
 def parse_fx_rates(year, rate, fx_rate_args):
@@ -360,7 +389,8 @@ def main(argv=None):
         # cashflows: dividends (corps) + interest (interests) + meaningful balance changes
         for c in st.get("corps", []):
             cashflows.append([d(c.get("date") or c.get("ex_date") or ym), "分红/公司行动",
-                              c.get("currency", ""), num(c.get("amount") or c.get("net_amount")),
+                              settle_ccy(c, "symbol", "code", "remark", "name"),
+                              num(c.get("amount") or c.get("net_amount")),
                               c.get("remark") or c.get("name") or json.dumps(c, ensure_ascii=False)])
         for it in st.get("interests", []):
             cashflows.append([d(it.get("date") or ym), "融资利息", it.get("currency", ""),
@@ -372,7 +402,7 @@ def main(argv=None):
             if bc in INTERNAL_BIZ and not is_div:
                 continue
             cashflows.append([d(a.get("date")), ("分红" if is_div else typ) or bc,
-                              a.get("currency", ""), num(a.get("amount")), remark])
+                              settle_ccy(a, "remark", "type"), num(a.get("amount")), remark])
         # IPO-allotted shares -> seed opening cost basis (they have no buy in stock_trades)
         for a in st.get("account_balance_changes", []):
             al = ipo_allotment(a)

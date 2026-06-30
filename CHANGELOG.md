@@ -4,6 +4,24 @@ All notable changes to the Longbridge statement tax skill are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); the project is
 date-versioned (no semver tags).
 
+## 2026-06-30
+
+### Fixed
+- **Cash dividends with a blank `currency` are no longer dropped from RMB conversion and the
+  dividend tax.** Real Longbridge statements often leave the `currency` field empty on
+  dividend lines (the same way IPO-allotment lines do — see gotcha #9), carrying the market
+  only inside the remark/symbol (e.g. `Cash Dividend 700.HK`, `AAPL.US`). Those dividends
+  were bucketed under an unknown ("") currency, which has no FX rate, so `金额(RMB)` and
+  `应纳税额(RMB)` came out blank — the dividend silently escaped the 20% tax. A new
+  `settle_ccy()` helper derives the settlement currency from an `@HKD`-style tag or a
+  `CODE.MARKET` suffix (mapped through `MARKET_CCY`) whenever the field is blank, and is now
+  applied to both dividend sources (`corps` and dividend-flagged `account_balance_changes`).
+
+### Added
+- `DividendCurrencyTest` covering `settle_ccy` precedence (explicit → `@CCY` tag → market
+  suffix) and an end-to-end check that blank-currency dividends are taxed under the right
+  currency instead of vanishing into the unknown bucket.
+
 ## 2026-06-29
 
 ### Changed
