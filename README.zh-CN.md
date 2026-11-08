@@ -70,9 +70,62 @@ python3 longbridge_tax.py --year 2025
 | `longbridge_<年>_股息利息现金流.csv` | 分红（corps）、融资利息、出入金 |
 | `longbridge_<年>_已实现盈亏_按标的.csv` | 按标的已实现盈亏（移动加权平均） |
 | `longbridge_<年>_账户净值.csv` | 每月资产总值（交叉校验） |
-| `longbridge_<年>_税务汇总.csv` | 按货币分组的税务汇总：财产转让/分红/利息 + 应纳税额 |
+| `longbridge_<年>_税务汇总.csv` | 按货币分组的税务汇总：财产转让/分红/资本利得分配/资本返还备查/利息 + 应纳税额 |
+| `longbridge_<年>_分配明细.csv` | 每笔分配的性质（股息/资本利得/资本返还）、来源与应用方式 |
+| `longbridge_<年>_次年成本加回.csv` | 仅资本利得分配：若券商已冲减成本，下一年用 `--opening-adjustments` 加回 |
 
-脚本会打印已实现盈亏合计、分红、利息，方便核对。
+脚本会打印已实现盈亏合计、分红、分配定性、利息，方便核对。
+
+### 分配定性：股息 / 资本利得 / 资本返还
+
+长桥把所有现金分配都叫「股息」，持仓的 `cost_price` 又是**摊薄成本**——任何分配都会让它下降，
+所以「成本降了」**不能**证明是资本返还。三者的税务处理不同：
+
+| 性质 | 税 | 成本基础 |
+|---|---|---|
+| `dividend` 股息 | 利息股息红利 20%，收到当年 | 不变 |
+| `capital_gain` 资本利得 | 财产转让 20%，收到当年 | **不变** |
+| `roc` 资本返还 | 不是收入 | **冲减**，递延到卖出 |
+
+```bash
+# 1) 先导出所有分配，character 留空待确认
+python3 longbridge_tax.py --year 2025 --write-distribution-template
+# 2) 按基金 tax supplement / 1042-S 填好 character（别用 cost_price 推），再运行
+python3 longbridge_tax.py --year 2025 --distributions distributions_template.csv
+# 严格模式：未定性的分配直接报错，而不是默认按股息
+python3 longbridge_tax.py --year 2025 --distributions d.csv --on-unclassified-distribution error
+```
+
+匹配顺序：`(代码, 日期)` → `(代码, 金额)` → 仅当该标的当年只分配一次时的通配规则；有歧义直接报错。
+
+### 手工调整：覆盖事件模型之外的情况
+
+产品无限、应税事件有限。拆股、非现金分配、合并对价、券商重分类这类事件，不需要为每个产品
+加分支，只要归入四类效果之一：
+
+```csv
+date,code,type,amount,currency,character,note
+2025-05-01,ABC,quantity,2,USD,,2-for-1 split
+2025-06-01,ABC,cost,120,USD,,non-cash distribution added to basis
+2025-07-01,ABC,realized,-500,USD,,broker reclassification
+2025-08-01,ABC,income,30,USD,dividend,special dividend
+```
+
+- `quantity`：amount=拆分比例（2 表示 2 拆 1），数量×比例、单位成本÷比例；
+- `cost`：amount=总成本变动额（正负均可）；
+- `realized`：直接计入财产转让所得；
+- `income`：计入收入，`character` 为 `dividend`（默认）或 `capital_gain`。
+
+规范的数据契约、分配决策树与失败模式见 [`docs/tax-treatment.md`](docs/tax-treatment.md)，
+通用示例见 [`docs/examples.md`](docs/examples.md)（示例非穷举）。
+资本利得分配会额外生成 `次年成本加回.csv`：如果券商冲减了成本，下一年运行时用
+`--opening-adjustments` 指回该文件。
+
+### 数据质量保护
+
+- **缺月结单默认直接停止**（静默跳过会少报税），确认缺口后才用 `--allow-missing-months` 继续；
+- **结单 key 前缀自动回退**：列表给的 `/statement_data/…` 失效时自动试 `/lb-statement/…`；
+- **按成交日归属**：额外读取次年 1 月结单（12/30–31 的成交要到下月才出），并丢弃日期不在本年度的行，避免上年 12 月被重复计入。
 
 ## 已实现盈亏怎么算
 

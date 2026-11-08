@@ -76,45 +76,122 @@ For `--year 2025`, if no rate is passed, the script uses the 2025-12-31 PBOC/CFE
 parity defaults: `HKD=0.90322`, `USD=7.0288`. Explicit `--rate` / `--fx-rate` values override
 the built-in defaults.
 
-`--on-negative-position {flag,exclude,short}` controls how negative/short positions are
-handled (default `flag`) — see **Negative positions** below; treat a `flag` run that reports
-negative positions as needing user confirmation, not a final answer.
+`--on-negative-position {netcash,flag,exclude,short}` controls how negative/short positions are
+handled (default `netcash`) — see **Negative positions** below; a `flag`/`netcash` run that
+still reports **non-option** negative positions needs user confirmation, not a silent pass.
+
+Other flags: `--refresh` re-downloads all monthly statements (bypassing the on-disk cache in
+`<outdir>/<year>/.statements/`); `--base-currency CCY` buckets blank-currency financing-interest
+lines (the statement gives no currency hint for them); `--allow-missing-months` lets a run
+continue when a monthly statement is unavailable (it warns loudly — results will be understated);
+`--distributions FILE` supplies the tax character of non-dividend distributions (see below);
+`--opening-adjustments FILE` adds an amount back to an instrument's opening cost (used in year
+N+1 after a capital-gain distribution the broker wrongly applied to cost); `--adjustments FILE`
+is the manual ledger for events the model does not cover (splits, non-cash distributions,
+reclassifications) — see **Manual adjustments** below.
 
 | Output (utf-8-sig) | Contents |
 |---|---|
 | `longbridge_<YEAR>_成交明细.csv` | stock / option / fund trades; `清算金额` already net of fees |
 | `longbridge_<YEAR>_股息利息现金流.csv` | dividends (corps), financing interest, withdrawals |
 | `longbridge_<YEAR>_已实现盈亏_按标的.csv` | realized P&L per instrument (average-cost) |
+| `longbridge_<YEAR>_期权结算事件.csv` | official OptionExpire/OptionExercise settlement rows |
 | `longbridge_<YEAR>_账户净值.csv` | per-month asset total (cross-check) |
-| `longbridge_<YEAR>_税务汇总.csv` | tax summary by currency: gains / dividends / interest + tax due |
+| `longbridge_<YEAR>_税务汇总.csv` | tax summary by currency: gains / dividends / capital-gain distributions / ROC memo / withholding credit / interest + tax due |
+| `longbridge_<YEAR>_分配明细.csv` | every detected distribution with its character (dividend / capital gain / ROC), source and how it was applied |
+| `longbridge_<YEAR>_次年成本加回.csv` | only for capital-gain distributions: feed to next year's `--opening-adjustments` if the broker reduced cost |
+| `longbridge_<YEAR>_手工调整.csv` | every `--adjustments` row with its type and how it was applied |
 
 The script prints realized total, dividends and interest so you can sanity-check.
 
-## Negative positions — STOP and confirm with the user
+## Negative positions — option sellers are normal; stocks are not
 
-A Longbridge **cash account cannot really short**, so when the reconstruction drives an
-instrument to a **negative position**, it almost always means **missing cost basis**, not a
-genuine short — e.g. shares transferred in (转入), a sell recorded before its buy, or the
-prior-December `cost_price` was `N/A` and got skipped. By default the script computes it as a
-symmetric short, **includes it in the totals**, and warns.
+A Longbridge **cash account cannot really short**, so a negative position on a **stock**
+almost always means **missing cost basis** (shares transferred in, a sell recorded before its
+buy, a `N/A` prior-December cost). BUT an **option contract opened by SELL-TO-OPEN and never
+bought back** reconstructs as a negative position too — that is the normal wheel/sell-put/
+sell-call pattern, not a data gap. The two cases must not be conflated (older versions of
+this script flagged both, which wrecks option sellers' totals).
 
-**When you (Claude) run the script and see `NEGATIVE_POSITION` on stderr (or a `⚠ 负持仓`
-note in `已实现盈亏_按标的.csv`), do NOT silently accept the default number.** Surface it and
-let the user choose the口径 before reporting any tax figure:
+Default mode `netcash` separates them by instrument type:
 
-1. **补成本基础重跑(最准 / recommended)** — the instrument is real but its opening cost is
-   missing. Find the correct carried-in cost (prior-year purchase price / transfer-in cost)
-   and re-run so the basis is seeded correctly. This is the only option that yields a correct
-   realized number.
-2. **先排除待核对** — re-run with `--on-negative-position=exclude`; the flagged instrument is
-   dropped from the totals and 税务汇总 so a data gap doesn't pollute the tax figure, and it's
-   listed separately for manual handling.
-3. **确认是做空** — only if the user confirms it is a genuine short, re-run with
-   `--on-negative-position=short` to include it without the warning.
+- **Option contracts** (codes like `NVDL250117C70000`): whatever their ending — expired
+  worthless, assigned, or bought back in-year — the option-side realized P&L **equals their
+  net option cash flow** (premium received − buybacks paid, fees included). The script books
+  exactly that, and labels each contract's ending from the **official settlement events**
+  (`equity_holding_changes` rows `OptionExpire` = expired worthless, `OptionExercise` =
+  assigned; absence of an event = bought back before expiry, which is normal, not a data
+  gap). A contract still open at year-end (expiry after Dec 31) is **excluded**: its premium
+  is unrealized. The **stock leg of an assignment** is already in `stock_trades` (delivered
+  exactly at the strike), so it lands in the stock bucket with no special handling.
+- **Short option positions carried in from the prior December** are seeded from the
+  prior-December `cost_price` (option costs are per-share; the script converts to
+  per-contract ×100) and computed by the average-cost engine.
+- **Stocks** going negative still warn (`flag` behaviour) — on a cash account that really is
+  missing basis. Only then, STOP and confirm with the user:
 
-Explain which instruments are affected and roughly how much they move the total, then re-run
-with the chosen flag (and corrected opening data for option 1). Never report a tax number from
-a `flag` run that still has unresolved negative positions without telling the user.
+  1. **补成本基础重跑(最准 / recommended)** — find the correct carried-in cost and re-run.
+  2. **先排除待核对** — re-run with `--on-negative-position=exclude`.
+  3. **确认是做空** — re-run with `--on-negative-position=short`.
+
+Also check the run summary's 年末未平仓期权 line: any option still held in the December
+statement whose expiry is inside the tax year means a settlement record was missed.
+
+## Distributions: dividend vs capital gain vs return of capital
+
+A cash distribution is **not automatically a dividend**, and neither the statement nor the
+broker's holding `cost_price` tells you its tax character:
+
+| Character | Tax treatment | Cost basis |
+|---|---|---|
+| `dividend` | 利息股息红利所得, 20 %, year received | unchanged |
+| `capital_gain` | 财产转让所得, 20 %, year received | **unchanged** |
+| `roc` (return of capital) | not income | **reduced**; deferred into the eventual sale |
+
+This matters: a year-end ETF capital-gain distribution looks exactly like a dividend in the
+statement, and the broker's `cost_price` is **摊薄成本** — it drops on *any* distribution, so
+using that drop as "proof of ROC" mislabels the year and the next year's opening basis. In one
+real case a four-digit USD distribution on a leveraged single-stock ETF was treated as ROC
+solely because `cost_price` fell by the same amount; the fund had actually paid a capital-gain
+distribution, which is income in the year received.
+
+Workflow:
+
+1. Run once with `--write-distribution-template`. It writes `distributions_template.csv` listing
+   every distribution (date, code, amount, source) with a blank `character` and a hint.
+2. Confirm each one from the fund's tax supplement / 1042-S (not from `cost_price`), then fill
+   `character` = `dividend` | `capital_gain` | `roc` (aliases and Chinese names accepted) and
+   pass the file back with `--distributions`.
+3. `--on-unclassified-distribution=error` makes the run stop instead of treating unknowns as
+   dividends; the default `dividend` behaviour lists them as "未定性/待确认" in the outputs.
+
+Matching is by `(code, date)`, then `(code, amount)`, then a wildcard only when that ticker
+distributes once; ambiguous rules raise rather than guess. For a capital-gain distribution the
+script also writes `次年成本加回.csv`: if the broker reduced `cost_price` for it, run next year
+with `--opening-adjustments <that file>` so the basis is not understated.
+
+## Manual adjustments (the long tail)
+
+Products are unbounded; taxable events are not. Instead of adding a branch per product, map any
+unmodelled event onto one of four effects:
+
+| `type` | `amount` | effect |
+|---|---|---|
+| `quantity` | split factor (2 = 2-for-1, 0.5 = 1-for-2) | qty × factor, unit cost ÷ factor |
+| `cost` | signed total-cost delta | non-cash distribution / merger consideration / basis correction |
+| `realized` | signed realized P&L | broker reclassification, booked as 财产转让 |
+| `income` | signed income | `character` = `dividend` (default `capital_gain`) |
+
+```csv
+date,code,type,amount,currency,character,note
+2025-05-01,ABC,quantity,2,USD,,2-for-1 split
+2025-06-01,ABC,cost,120,USD,,non-cash distribution added to basis
+```
+
+`ls`-style event definitions, the distribution decision tree and every data contract are in
+[`docs/tax-treatment.md`](docs/tax-treatment.md); generic worked examples are in
+[`docs/examples.md`](docs/examples.md). Those are illustrative, not exhaustive — if an event
+does not fit, record it in `--adjustments` rather than guessing.
 
 ## How it works
 
@@ -171,6 +248,16 @@ a `flag` run that still has unresolved negative positions without telling the us
    `IPO Allotted Amount(Dr)` line in `account_balance_changes` (`biz_code LIPOALDR`); the script
    seeds it automatically. Without it, selling allotted shares would look like a zero-cost short
    and massively overstate the gain (it once flipped a real +HKD 10k profit into a fake loss).
+
+10. **A distribution's tax character is input, not inference.** `corps` / `Cash Dividend`
+    lines and a falling `cost_price` cannot distinguish an ordinary dividend, a capital-gain
+    distribution and return of capital. Use `--distributions`; the default treats unknowns as
+    dividends and lists them as 待确认.
+11. **Trade-date attribution, not statement month.** Statements are cut by settlement month:
+    January's statement carries the prior December's trades, and 30/31 December trades only
+    appear in the next January's statement. The script now reads `<year+1>01` too and keeps
+    only rows whose trade date is inside the year — otherwise a trade is counted twice
+    (prior December) or missed (year-end).
 
 ## Tax note (个税 境外所得)
 
